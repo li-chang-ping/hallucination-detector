@@ -31,10 +31,13 @@ def test_seed_and_update_categories() -> None:
         )
         updated = update_category(session, custom, CategoryUpdate(is_active=False))
         assert updated.is_active is False
+        unchanged = update_category(session, custom, CategoryUpdate(name=None, description=None))
+        assert unchanged.name == "测试分类"
+        assert unchanged.description == "用于验证更新"
         versions = list(
             session.scalars(select(CategoryVersion).where(CategoryVersion.category_id == custom.id))
         )
-        assert len(versions) == 2
+        assert len(versions) == 3
         assert versions[0].snapshot["is_active"] is True
 
         restored = rollback_category(session, custom, versions[0])
@@ -47,5 +50,5 @@ def test_seed_and_update_categories() -> None:
                     )
                 )
             )
-            == 3
+            == 4
         )

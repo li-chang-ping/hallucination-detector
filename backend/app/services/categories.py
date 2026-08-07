@@ -98,7 +98,7 @@ def update_category(
     note: str = "编辑分类",
 ) -> Category:
     ensure_category_version(session, category)
-    for field, value in data.model_dump(exclude_unset=True, mode="json").items():
+    for field, value in data.model_dump(exclude_unset=True, exclude_none=True, mode="json").items():
         setattr(category, field, value)
     category.updated_at = utc_now()
     record_category_version(session, category, source=source, note=note)
