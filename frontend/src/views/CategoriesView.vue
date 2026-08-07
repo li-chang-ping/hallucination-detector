@@ -3,11 +3,16 @@ import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
-import type { Category, Severity } from '../types'
+import type { Category, CategoryVersion, Severity } from '../types'
+import { formatTime } from '../utils'
 
 const categories = ref<Category[]>([])
 const visible = ref(false)
 const editingId = ref<string>()
+const historyVisible = ref(false)
+const historyCategory = ref<Category>()
+const versions = ref<CategoryVersion[]>([])
+const rollbackBusy = ref<string>()
 const form = ref({
   name: '',
   description: '',
@@ -63,6 +68,36 @@ async function archive(item: Category) {
     ElMessage.error((e as Error).message)
   }
 }
+async function openHistory(item: Category) {
+  historyCategory.value = item
+  try {
+    versions.value = (await api.get<CategoryVersion[]>(`/categories/${item.id}/versions`)).data
+    historyVisible.value = true
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
+}
+async function rollback(version: CategoryVersion) {
+  if (!historyCategory.value) return
+  await ElMessageBox.confirm(
+    '确认恢复到这个历史版本？当前定义也会保留为可回退版本。',
+    '回退分类定义',
+    { type: 'warning' },
+  )
+  rollbackBusy.value = version.id
+  try {
+    const categoryId = historyCategory.value.id
+    await api.post(`/categories/${categoryId}/rollback/${version.id}`)
+    ElMessage.success('分类定义已回退')
+    await load()
+    const current = categories.value.find((item) => item.id === categoryId)
+    if (current) await openHistory(current)
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  } finally {
+    rollbackBusy.value = undefined
+  }
+}
 onMounted(load)
 </script>
 <template>
@@ -106,9 +141,10 @@ onMounted(load)
             @change="
               api.put(`/categories/${row.id}`, { is_active: row.is_active })
             " /></template></el-table-column
-      ><el-table-column label="操作" width="140"
+      ><el-table-column label="操作" width="195"
         ><template #default="{ row }"
           ><el-button link type="primary" @click="open(row)">编辑</el-button
+          ><el-button link @click="openHistory(row)">历史</el-button
           ><el-button link type="danger" @click="archive(row)">归档</el-button></template
         ></el-table-column
       ></el-table
@@ -136,4 +172,32 @@ onMounted(load)
       ><el-button type="primary" @click="save">保存</el-button></template
     ></el-dialog
   >
+  <el-dialog
+    v-model="historyVisible"
+    :title="`${historyCategory?.name || ''} · 版本历史`"
+    width="760px"
+  >
+    <el-alert
+      title="每次编辑、采纳优化建议和回退都会生成版本快照。"
+      type="info"
+      :closable="false"
+      style="margin-bottom: 14px"
+    />
+    <el-table :data="versions" max-height="520">
+      <el-table-column label="时间" width="175">
+        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+      </el-table-column>
+      <el-table-column prop="note" label="变更来源" width="210" />
+      <el-table-column label="定义快照" min-width="250" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.snapshot.description }}</template>
+      </el-table-column>
+      <el-table-column label="操作" width="90">
+        <template #default="{ row }">
+          <el-button link type="primary" :loading="rollbackBusy === row.id" @click="rollback(row)"
+            >回退</el-button
+          >
+        </template>
+      </el-table-column>
+    </el-table>
+  </el-dialog>
 </template>

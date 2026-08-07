@@ -10,6 +10,17 @@ export interface Category {
   prompt_guidance: string
   is_active: boolean
   is_archived: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface CategoryVersion {
+  id: string
+  category_id: string
+  snapshot: Record<string, any>
+  source: string
+  note: string
+  created_at: string
 }
 
 export interface KnowledgeBase {
@@ -69,6 +80,30 @@ export interface Evaluation {
   metrics: Record<string, any>
   ground_truth_count: number
   created_at: string
+  analyses: EvaluationAnalysis[]
+  suggestions: CategorySuggestion[]
+}
+
+export interface EvaluationAnalysis {
+  id: string
+  input_id: string
+  error_type: 'false_negative' | 'false_positive'
+  human_category: string | null
+  predicted_category: string | null
+  reason: string
+  likely_cause: string
+  evidence_summary: string
+}
+
+export interface CategorySuggestion {
+  id: string
+  category_id: string
+  target_category_name: string
+  reason: string
+  proposed_changes: Partial<Pick<Category, 'description' | 'prompt_guidance' | 'default_severity'>>
+  status: 'pending' | 'applied' | 'rejected'
+  created_at: string
+  decided_at: string | null
 }
 
 export interface CategoryMismatch {

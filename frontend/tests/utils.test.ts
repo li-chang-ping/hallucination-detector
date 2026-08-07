@@ -1,4 +1,4 @@
-import { formatCategoryMismatches, percent, statusText } from '../src/utils'
+import { categoryChangeEntries, formatCategoryMismatches, percent, statusText } from '../src/utils'
 
 describe('display utilities', () => {
   it('formats evaluation ratios', () => expect(percent(0.9444)).toBe('94.4%'))
@@ -13,5 +13,10 @@ describe('display utilities', () => {
         },
       ]),
     ).toBe('h08（人工：政策与优惠错误；模型：事实信息编造）')
+  })
+  it('formats category suggestion fields', () => {
+    expect(categoryChangeEntries({ prompt_guidance: '优先识别政策条件' })).toEqual([
+      ['判定指引', '优先识别政策条件'],
+    ])
   })
 })

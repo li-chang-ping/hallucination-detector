@@ -27,3 +27,13 @@ export function formatCategoryMismatches(items: CategoryMismatch[]): string {
     )
     .join('；')
 }
+
+const categoryFieldLabels: Record<string, string> = {
+  description: '分类定义',
+  prompt_guidance: '判定指引',
+  default_severity: '默认严重度',
+}
+
+export function categoryChangeEntries(changes: Record<string, unknown>): [string, unknown][] {
+  return Object.entries(changes).map(([key, value]) => [categoryFieldLabels[key] || key, value])
+}
