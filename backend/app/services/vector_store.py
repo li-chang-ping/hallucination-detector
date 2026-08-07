@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 import chromadb
 import httpx
@@ -55,9 +55,9 @@ class VectorStore:
         )
         collection.upsert(
             ids=ids,
-            embeddings=self.embed(documents),
+            embeddings=cast(Any, self.embed(documents)),
             documents=documents,
-            metadatas=metadatas,
+            metadatas=cast(Any, metadatas),
         )
 
     def delete_entry(self, knowledge_base_id: str, entry_id: str) -> None:
@@ -73,14 +73,14 @@ class VectorStore:
     def query(self, knowledge_base_id: str, text: str, limit: int = 5) -> list[dict[str, Any]]:
         collection = self.chroma.get_collection(self.collection_name(knowledge_base_id))
         result = collection.query(
-            query_embeddings=self.embed([text]),
+            query_embeddings=cast(Any, self.embed([text])),
             n_results=limit,
             include=["documents", "metadatas", "distances"],
         )
-        ids = result.get("ids", [[]])[0]
-        documents = result.get("documents", [[]])[0]
-        metadatas = result.get("metadatas", [[]])[0]
-        distances = result.get("distances", [[]])[0]
+        ids = (result.get("ids") or [[]])[0]
+        documents = (result.get("documents") or [[]])[0]
+        metadatas = (result.get("metadatas") or [[]])[0]
+        distances = (result.get("distances") or [[]])[0]
         return [
             {"id": item_id, "content": doc, "metadata": meta or {}, "distance": distance}
             for item_id, doc, meta, distance in zip(

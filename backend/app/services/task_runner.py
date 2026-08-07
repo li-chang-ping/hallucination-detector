@@ -2,6 +2,7 @@ import asyncio
 from functools import lru_cache
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import DetectionItem, DetectionTask, TaskStatus, utc_now
@@ -129,7 +130,7 @@ class TaskRunner:
             session.commit()
 
     @staticmethod
-    def _finish(session: object, task: DetectionTask) -> None:
+    def _finish(session: Session, task: DetectionTask) -> None:
         task.status = TaskStatus.PARTIAL if task.error_count else TaskStatus.COMPLETED
         task.finished_at = utc_now()
         task.updated_at = utc_now()
@@ -154,4 +155,3 @@ def recover_interrupted_tasks() -> None:
             task.status = TaskStatus.PAUSED
             task.updated_at = utc_now()
         session.commit()
-
