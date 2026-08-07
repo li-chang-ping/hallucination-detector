@@ -78,6 +78,8 @@ powershell -File scripts/start-frontend.ps1
 [{"id":"h01","is_hallucination":true,"hallucination_type":"政策编造","detail":"回复与实际退货政策矛盾"}]
 ```
 
+人工标注 ID 必须与任务条目完整且逐一对应，不允许只上传子集或包含未知 ID。部分失败任务中，人工标注为幻觉但模型未产出判定的条目会计入漏检，避免只统计成功结果造成检出率虚高。
+
 本地附件不会提交仓库。可在本机生成演示导入文件：
 
 ```powershell
@@ -90,7 +92,7 @@ backend\.venv\Scripts\python.exe scripts\prepare_demo.py "0110附件\task4_repli
 powershell -File scripts/quality.ps1
 ```
 
-后端使用 Ruff、mypy、pytest；前端使用 ESLint、Prettier、vue-tsc、Vitest 和 Vite 生产构建。常规测试只替换外部网络边界，产品中没有 mock 检测模式。
+后端使用 Ruff、mypy、pytest；前端使用 ESLint、Prettier、vue-tsc、Vitest 和 Vite 生产构建。测试覆盖输入唯一性、任务状态边界、SQLite/Chroma 写操作回滚、嵌入模型一致性、错误提示与前端乐观状态回滚。常规测试只替换外部网络边界，产品中没有 mock 检测模式。
 
 ## 附件实测结果
 

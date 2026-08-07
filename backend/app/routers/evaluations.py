@@ -8,12 +8,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import CategorySuggestion, DetectionItem, DetectionTask, Evaluation
-from app.schemas.evaluations import CategorySuggestionRead, EvaluationRead, GroundTruthItem
+from app.models import CategorySuggestion, DetectionItem, DetectionTask, Evaluation, TaskStatus
+from app.schemas.evaluations import (
+    CategorySuggestionRead,
+    EvaluationRead,
+    GroundTruthBatch,
+    GroundTruthItem,
+)
 from app.services.evaluations import (
     calculate_metrics,
     create_evaluation_insights,
     decide_suggestion,
+    validate_ground_truth_ids,
 )
 
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
@@ -35,18 +41,32 @@ def list_evaluations(task_id: str, session: DbSession) -> list[Evaluation]:
 async def evaluate_task(
     task_id: str, session: DbSession, file: Annotated[UploadFile, File()]
 ) -> Evaluation:
-    if session.get(DetectionTask, task_id) is None:
+    task = session.get(DetectionTask, task_id)
+    if task is None:
         raise HTTPException(status_code=404, detail="检测任务不存在")
+    if task.status not in {
+        TaskStatus.COMPLETED,
+        TaskStatus.PARTIAL,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    }:
+        raise HTTPException(status_code=409, detail="检测任务尚未结束，暂不能上传人工标注")
     if not file.filename or not file.filename.lower().endswith(".json"):
         raise HTTPException(status_code=400, detail="仅支持 JSON 文件")
     try:
         payload = json.loads((await file.read()).decode("utf-8"))
-        truths = TypeAdapter(list[GroundTruthItem]).validate_python(payload)
+        truths = GroundTruthBatch(
+            items=TypeAdapter(list[GroundTruthItem]).validate_python(payload)
+        ).items
     except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
         raise HTTPException(status_code=422, detail=f"人工标注 JSON 格式错误: {exc}") from exc
     predictions = list(
         session.scalars(select(DetectionItem).where(DetectionItem.task_id == task_id))
     )
+    try:
+        validate_ground_truth_ids(predictions, truths)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     evaluation = Evaluation(
         task_id=task_id,
         metrics=calculate_metrics(predictions, truths),

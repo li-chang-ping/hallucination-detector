@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -12,12 +14,13 @@ from app.models import (
     Evaluation,
     Severity,
 )
-from app.schemas.evaluations import EvaluationRead, GroundTruthItem
+from app.schemas.evaluations import EvaluationRead, GroundTruthBatch, GroundTruthItem
 from app.services.evaluations import (
     _fallback_analysis,
     build_error_cases,
     calculate_metrics,
     decide_suggestion,
+    validate_ground_truth_ids,
 )
 
 
@@ -38,6 +41,37 @@ def prediction(
         primary_category=primary,
         category_names=categories if categories is not None else ([primary] if primary else []),
     )
+
+
+def test_ground_truth_batch_rejects_empty_and_duplicate_ids() -> None:
+    with pytest.raises(ValidationError):
+        GroundTruthBatch(items=[])
+
+    duplicate = GroundTruthItem(id="h01", is_hallucination=False)
+    with pytest.raises(ValidationError, match="id 必须唯一"):
+        GroundTruthBatch(items=[duplicate, duplicate])
+
+
+def test_ground_truth_ids_must_match_task_items() -> None:
+    predictions = [prediction("h01", False), prediction("h02", False)]
+    truths = [GroundTruthItem(id="h01", is_hallucination=False)]
+
+    with pytest.raises(ValueError, match="缺少任务 ID：h02"):
+        validate_ground_truth_ids(predictions, truths)
+
+
+def test_missing_model_result_is_not_silently_excluded() -> None:
+    unresolved = prediction("h01", False)
+    unresolved.is_hallucination = None
+    truths = [GroundTruthItem(id="h01", is_hallucination=True, hallucination_type="政策错误")]
+
+    metrics = calculate_metrics([unresolved], truths)
+
+    assert metrics["evaluated_count"] == 1
+    assert metrics["prediction_count"] == 0
+    assert metrics["fn"] == 1
+    assert metrics["recall"] == 0
+    assert metrics["false_negative_ids"] == ["h01"]
 
 
 def test_calculate_binary_and_category_metrics() -> None:

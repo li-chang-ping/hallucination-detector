@@ -25,6 +25,22 @@ def _divide(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4) if denominator else 0.0
 
 
+def validate_ground_truth_ids(
+    predictions: list[DetectionItem], truths: list[GroundTruthItem]
+) -> None:
+    prediction_ids = {item.input_id for item in predictions}
+    truth_ids = {item.id for item in truths}
+    missing = sorted(prediction_ids - truth_ids)
+    unknown = sorted(truth_ids - prediction_ids)
+    if missing or unknown:
+        details = []
+        if missing:
+            details.append(f"缺少任务 ID：{'、'.join(missing[:10])}")
+        if unknown:
+            details.append(f"包含未知 ID：{'、'.join(unknown[:10])}")
+        raise ValueError("人工标注必须与任务条目完全一致；" + "；".join(details))
+
+
 def calculate_metrics(
     predictions: list[DetectionItem], truths: list[GroundTruthItem]
 ) -> dict[str, object]:
@@ -32,7 +48,7 @@ def calculate_metrics(
         item.input_id: item for item in predictions if item.is_hallucination is not None
     }
     truth_map = {item.id: item for item in truths}
-    common_ids = sorted(prediction_map.keys() & truth_map.keys())
+    all_truth_ids = sorted(truth_map)
     tp = tn = fp = fn = 0
     binary_tp = binary_tn = binary_fp = binary_fn = 0
     false_positive_ids: list[str] = []
@@ -40,9 +56,16 @@ def calculate_metrics(
     category_mismatch_ids: list[str] = []
     category_mismatches: list[dict[str, object]] = []
 
-    for item_id in common_ids:
-        prediction = prediction_map[item_id]
+    for item_id in all_truth_ids:
         truth = truth_map[item_id]
+        prediction = prediction_map.get(item_id)
+        if prediction is None:
+            # 未产出模型判定不能被静默排除，否则部分失败任务会得到虚高的检出率。
+            if truth.is_hallucination:
+                fn += 1
+                binary_fn += 1
+                false_negative_ids.append(item_id)
+            continue
         predicted = bool(prediction.is_hallucination)
         actual = truth.is_hallucination
         expected = truth.hallucination_type if actual and truth.hallucination_type else None
@@ -82,7 +105,7 @@ def calculate_metrics(
         else:
             tn += 1
     return {
-        "evaluated_count": len(common_ids),
+        "evaluated_count": len(truths),
         "ground_truth_count": len(truths),
         "prediction_count": len(prediction_map),
         "tp": tp,
@@ -91,7 +114,7 @@ def calculate_metrics(
         "fn": fn,
         "precision": _divide(tp, tp + fp),
         "recall": _divide(tp, tp + fn),
-        "accuracy": _divide(tp + tn, len(common_ids)),
+        "accuracy": _divide(tp + tn, len(truths)),
         "false_positive_ids": false_positive_ids,
         "false_negative_ids": false_negative_ids,
         "category_mismatch_ids": category_mismatch_ids,

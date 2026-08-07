@@ -15,6 +15,19 @@ class GroundTruthItem(BaseModel):
     detail: str = ""
 
 
+class GroundTruthBatch(BaseModel):
+    items: list[GroundTruthItem]
+
+    @model_validator(mode="after")
+    def validate_items(self) -> "GroundTruthBatch":
+        if not 1 <= len(self.items) <= 10000:
+            raise ValueError("人工标注必须包含 1 到 10000 条记录")
+        ids = [item.id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("人工标注 id 必须唯一")
+        return self
+
+
 class EvaluationAnalysisDraft(BaseModel):
     input_id: str = Field(min_length=1, max_length=120)
     error_type: Literal["false_negative", "false_positive"]
