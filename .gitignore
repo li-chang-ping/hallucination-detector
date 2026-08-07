@@ -21,6 +21,7 @@ screenshots/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
+frontend/.vite/
 .pnpm-store/
 *.tsbuildinfo
 
