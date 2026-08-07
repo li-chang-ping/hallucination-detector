@@ -182,7 +182,10 @@ class CategorySuggestion(Base):
     evaluation_id: Mapped[str] = mapped_column(
         ForeignKey("evaluations.id", ondelete="CASCADE"), index=True
     )
-    category_id: Mapped[str] = mapped_column(ForeignKey("categories.id"), index=True)
+    category_id: Mapped[str | None] = mapped_column(
+        ForeignKey("categories.id"), index=True, nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(20), default="update")
     target_category_name: Mapped[str] = mapped_column(String(80))
     reason: Mapped[str] = mapped_column(Text)
     proposed_changes: Mapped[dict[str, object]] = mapped_column(JSON)

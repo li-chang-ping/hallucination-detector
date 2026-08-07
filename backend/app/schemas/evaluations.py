@@ -24,22 +24,30 @@ class EvaluationAnalysisDraft(BaseModel):
 
 
 class CategorySuggestionDraft(BaseModel):
+    action: Literal["create", "update", "archive"]
     target_category_name: str = Field(min_length=2, max_length=80)
     reason: str = Field(min_length=2, max_length=1000)
+    proposed_name: str | None = Field(default=None, min_length=2, max_length=80)
     proposed_description: str | None = Field(default=None, min_length=2, max_length=1000)
     proposed_prompt_guidance: str | None = Field(default=None, min_length=2, max_length=2000)
     proposed_default_severity: Severity | None = None
 
     @model_validator(mode="after")
     def require_change(self) -> "CategorySuggestionDraft":
-        if not any(
-            (
-                self.proposed_description,
-                self.proposed_prompt_guidance,
-                self.proposed_default_severity,
-            )
+        changes = (
+            self.proposed_name,
+            self.proposed_description,
+            self.proposed_prompt_guidance,
+            self.proposed_default_severity,
+        )
+        if self.action == "create" and not (
+            self.proposed_description and self.proposed_default_severity
         ):
-            raise ValueError("优化建议至少需要修改一个字段")
+            raise ValueError("新增建议必须提供分类定义和默认严重度")
+        if self.action == "update" and not any(changes):
+            raise ValueError("修改建议至少需要修改一个字段")
+        if self.action == "archive" and any(changes):
+            raise ValueError("归档建议不能包含字段修改")
         return self
 
 
@@ -65,7 +73,8 @@ class CategorySuggestionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    category_id: str
+    category_id: str | None
+    action: str
     target_category_name: str
     reason: str
     proposed_changes: dict[str, object]

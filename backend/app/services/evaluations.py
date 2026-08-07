@@ -212,7 +212,7 @@ async def create_evaluation_insights(
         )
     category_map = {item.name: item for item in categories}
     for suggestion_draft in generated.suggestions:
-        category = category_map[suggestion_draft.target_category_name]
+        category = category_map.get(suggestion_draft.target_category_name)
         changes = {
             key.removeprefix("proposed_"): value
             for key, value in suggestion_draft.model_dump(mode="json").items()
@@ -221,8 +221,9 @@ async def create_evaluation_insights(
         session.add(
             CategorySuggestion(
                 evaluation_id=evaluation.id,
-                category_id=category.id,
-                target_category_name=category.name,
+                category_id=category.id if category else None,
+                action=suggestion_draft.action,
+                target_category_name=suggestion_draft.target_category_name,
                 reason=suggestion_draft.reason,
                 proposed_changes=changes,
             )
@@ -236,20 +237,50 @@ def decide_suggestion(
     if suggestion.status != "pending":
         raise ValueError("该优化建议已经处理")
     if apply:
-        category = session.get(Category, suggestion.category_id)
-        if category is None or category.is_archived:
-            raise LookupError("目标幻觉分类不存在或已归档")
-        ensure_category_version(session, category)
-        for field, value in suggestion.proposed_changes.items():
-            if field in {"description", "prompt_guidance", "default_severity"}:
-                setattr(category, field, value)
-        category.updated_at = utc_now()
-        record_category_version(
-            session,
-            category,
-            source="evaluation_suggestion",
-            note=f"采纳评测建议 {suggestion.id}",
-        )
+        if suggestion.action == "create":
+            changes = suggestion.proposed_changes
+            category = Category(
+                name=suggestion.target_category_name,
+                description=cast(str, changes["description"]),
+                default_severity=cast(str, changes["default_severity"]),
+                prompt_guidance=cast(str, changes.get("prompt_guidance", "")),
+                is_active=True,
+            )
+            session.add(category)
+            session.flush()
+            suggestion.category_id = category.id
+            record_category_version(
+                session,
+                category,
+                source="evaluation_suggestion",
+                note=f"采纳评测新增建议 {suggestion.id}",
+            )
+        else:
+            target_category = session.get(Category, suggestion.category_id)
+            if target_category is None or target_category.is_archived:
+                raise LookupError("目标幻觉分类不存在或已归档")
+            ensure_category_version(session, target_category)
+            if suggestion.action == "archive":
+                target_category.is_archived = True
+                target_category.is_active = False
+                note = f"采纳评测归档建议 {suggestion.id}"
+            else:
+                for field, value in suggestion.proposed_changes.items():
+                    if field in {
+                        "name",
+                        "description",
+                        "prompt_guidance",
+                        "default_severity",
+                    }:
+                        setattr(target_category, field, value)
+                note = f"采纳评测修改建议 {suggestion.id}"
+            target_category.updated_at = utc_now()
+            record_category_version(
+                session,
+                target_category,
+                source="evaluation_suggestion",
+                note=note,
+            )
         suggestion.status = "applied"
     else:
         suggestion.status = "rejected"

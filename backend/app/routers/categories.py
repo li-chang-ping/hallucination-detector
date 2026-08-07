@@ -20,20 +20,24 @@ router = APIRouter(prefix="/categories", tags=["categories"])
 DbSession = Annotated[Session, Depends(get_db)]
 
 
-def get_category_or_404(session: Session, category_id: str) -> Category:
+def get_category_or_404(
+    session: Session, category_id: str, *, allow_archived: bool = False
+) -> Category:
     category = session.get(Category, category_id)
-    if category is None or category.is_archived:
+    if category is None or (category.is_archived and not allow_archived):
         raise HTTPException(status_code=404, detail="幻觉分类不存在")
     return category
 
 
 @router.get("", response_model=list[CategoryRead])
 def list_categories(
-    session: DbSession, include_inactive: bool = Query(default=True)
+    session: DbSession,
+    include_inactive: bool = Query(default=True),
+    include_archived: bool = Query(default=False),
 ) -> list[Category]:
-    statement = (
-        select(Category).where(Category.is_archived.is_(False)).order_by(Category.created_at)
-    )
+    statement = select(Category).order_by(Category.created_at)
+    if not include_archived:
+        statement = statement.where(Category.is_archived.is_(False))
     if not include_inactive:
         statement = statement.where(Category.is_active.is_(True))
     return list(session.scalars(statement))
@@ -71,7 +75,7 @@ def archive_category(category_id: str, session: DbSession) -> None:
 
 @router.get("/{category_id}/versions", response_model=list[CategoryVersionRead])
 def list_category_versions(category_id: str, session: DbSession) -> list[CategoryVersion]:
-    category = get_category_or_404(session, category_id)
+    category = get_category_or_404(session, category_id, allow_archived=True)
     ensure_category_version(session, category)
     return list(
         session.scalars(
@@ -84,7 +88,7 @@ def list_category_versions(category_id: str, session: DbSession) -> list[Categor
 
 @router.post("/{category_id}/rollback/{version_id}", response_model=CategoryRead)
 def restore_category(category_id: str, version_id: str, session: DbSession) -> Category:
-    category = get_category_or_404(session, category_id)
+    category = get_category_or_404(session, category_id, allow_archived=True)
     version = session.get(CategoryVersion, version_id)
     if version is None or version.category_id != category_id:
         raise HTTPException(status_code=404, detail="分类历史版本不存在")

@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -74,6 +75,9 @@ def apply_suggestion(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="建议中的分类名称已存在") from exc
 
 
 @router.post(

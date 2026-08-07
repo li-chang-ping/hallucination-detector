@@ -83,7 +83,10 @@ class DeepSeekClient:
             "requirements": [
                 "逐条解释误判形成原因，analysis 的 input_id 和 error_type 必须与输入一致",
                 "只在分类边界或判定指引确实可改进时给出建议，避免为单个样本过拟合",
-                "建议只能修改现有分类的 description、prompt_guidance、default_severity",
+                "建议 action 可为 create、update、archive",
+                "create 用于缺少必要分类，target_category_name 是新分类名",
+                "update 可修改 name、description、prompt_guidance、default_severity",
+                "archive 仅用于确认冗余或错误的现有分类，不包含 proposed 字段",
                 "存在误判时至少给出一条可执行的分类优化建议",
                 "不要建议新增分类，不要输出思维过程",
             ],
@@ -122,10 +125,19 @@ class DeepSeekClient:
                     content = response.json()["choices"][0]["message"]["content"]
                     result = EvaluationAnalysisResponse.model_validate_json(content)
                     unknown = {
-                        item.target_category_name for item in result.suggestions
+                        item.target_category_name
+                        for item in result.suggestions
+                        if item.action in {"update", "archive"}
                     } - allowed_names
                     if unknown:
                         raise ValueError(f"优化建议包含未知分类: {', '.join(sorted(unknown))}")
+                    duplicates = {
+                        item.target_category_name
+                        for item in result.suggestions
+                        if item.action == "create" and item.target_category_name in allowed_names
+                    }
+                    if duplicates:
+                        raise ValueError(f"新增建议使用了已有分类: {', '.join(sorted(duplicates))}")
                     return result
             except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
                 last_error = exc

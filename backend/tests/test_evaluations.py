@@ -178,3 +178,47 @@ def test_apply_suggestion_updates_category_and_creates_version() -> None:
         assert len(versions) == 2
         assert versions[0].snapshot["prompt_guidance"] == "旧指引"
         assert versions[1].snapshot["prompt_guidance"] == "新指引"
+
+
+def test_apply_create_and_archive_suggestions() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        evaluation = Evaluation(task_id="task", metrics={}, ground_truth_count=1)
+        session.add(evaluation)
+        session.flush()
+        create_suggestion = CategorySuggestion(
+            evaluation_id=evaluation.id,
+            category_id=None,
+            action="create",
+            target_category_name="政策偏差",
+            reason="人工分类缺少对应定义",
+            proposed_changes={
+                "description": "政策内容与证据存在部分偏差",
+                "default_severity": "high",
+                "prompt_guidance": "识别部分正确、部分错误的政策回复",
+            },
+        )
+        session.add(create_suggestion)
+        session.commit()
+
+        decided_create = decide_suggestion(session, create_suggestion, apply=True)
+        created = session.scalar(select(Category).where(Category.name == "政策偏差"))
+        assert decided_create.status == "applied"
+        assert created is not None
+        assert decided_create.category_id == created.id
+
+        archive_suggestion = CategorySuggestion(
+            evaluation_id=evaluation.id,
+            category_id=created.id,
+            action="archive",
+            target_category_name=created.name,
+            reason="分类已不再使用",
+            proposed_changes={},
+        )
+        session.add(archive_suggestion)
+        session.commit()
+
+        decide_suggestion(session, archive_suggestion, apply=True)
+        assert created.is_archived is True
+        assert created.is_active is False
