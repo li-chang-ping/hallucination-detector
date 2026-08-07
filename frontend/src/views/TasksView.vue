@@ -5,7 +5,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../api'
 import type { DetectionTask, KnowledgeBase } from '../types'
-import { formatTime, statusText } from '../utils'
+import { canCancelTask, formatTime, statusText, taskProgress } from '../utils'
 
 const router = useRouter()
 const tasks = ref<DetectionTask[]>([])
@@ -105,9 +105,7 @@ onMounted(load)
         ><template #default="{ row }"
           ><el-progress
             :percentage="
-              row.total_count
-                ? Math.round(((row.completed_count + row.error_count) / row.total_count) * 100)
-                : 0
+              taskProgress(row.total_count, row.completed_count, row.error_count)
             " /></template
       ></el-table-column>
       <el-table-column prop="model_name" label="模型" width="175" />
@@ -131,7 +129,7 @@ onMounted(load)
             >继续</el-button
           >
           <el-button
-            v-if="!['completed', 'partial', 'cancelled'].includes(row.status)"
+            v-if="canCancelTask(row.status)"
             link
             type="danger"
             @click.stop="action(row, 'cancel')"

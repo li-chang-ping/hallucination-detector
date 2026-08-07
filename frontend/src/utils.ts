@@ -43,3 +43,20 @@ export function categorySnapshotStatus(snapshot: Record<string, unknown>): strin
   if (snapshot.is_archived) return '已归档'
   return snapshot.is_active ? '已启用' : '已停用'
 }
+
+export function isDialogCancelled(error: unknown): boolean {
+  return error === 'cancel' || error === 'close'
+}
+
+export function taskProgress(total: number, completed: number, errors: number): number {
+  if (total <= 0) return 0
+  return Math.min(100, Math.round(((completed + errors) / total) * 100))
+}
+
+export function canCancelTask(status: string): boolean {
+  return !['completed', 'partial', 'failed', 'cancelled'].includes(status)
+}
+
+export function canEvaluateTask(status: string): boolean {
+  return ['completed', 'partial', 'failed', 'cancelled'].includes(status)
+}

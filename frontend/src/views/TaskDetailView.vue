@@ -5,7 +5,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import type { CategorySuggestion, DetectionItem, DetectionTask, Evaluation } from '../types'
-import { categoryChangeEntries, formatCategoryMismatches, percent, statusText } from '../utils'
+import {
+  canEvaluateTask,
+  categoryChangeEntries,
+  formatCategoryMismatches,
+  percent,
+  statusText,
+  taskProgress,
+} from '../utils'
 
 const route = useRoute(),
   router = useRouter(),
@@ -93,9 +100,7 @@ onBeforeUnmount(() => timer && clearInterval(timer))
         ><strong>{{ task.completed_count + task.error_count }} / {{ task.total_count }}</strong
         ><el-progress
           :show-text="false"
-          :percentage="
-            Math.round(((task.completed_count + task.error_count) / task.total_count) * 100)
-          "
+          :percentage="taskProgress(task.total_count, task.completed_count, task.error_count)"
         />
       </div>
       <div class="metric-card">
@@ -212,9 +217,13 @@ onBeforeUnmount(() => timer && clearInterval(timer))
               :limit="1"
               accept=".json"
               :show-file-list="false"
+              :disabled="!canEvaluateTask(task.status)"
               :on-change="(f: any) => (evaluationFile = f.raw)"
               ><el-button :icon="Upload">选择人工标注</el-button></el-upload
-            ><el-button type="primary" :disabled="!evaluationFile" @click="evaluate"
+            ><el-button
+              type="primary"
+              :disabled="!evaluationFile || !canEvaluateTask(task.status)"
+              @click="evaluate"
               >开始比对</el-button
             >
           </div>

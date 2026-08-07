@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox, type UploadRawFile } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { KnowledgeBase, KnowledgeEntry } from '../types'
+import { isDialogCancelled } from '../utils'
 
 const bases = ref<KnowledgeBase[]>([]),
   entries = ref<KnowledgeEntry[]>([]),
@@ -25,8 +26,13 @@ async function load() {
   }
 }
 async function select(kb: KnowledgeBase) {
-  selected.value = kb
-  entries.value = (await api.get<KnowledgeEntry[]>(`/knowledge-bases/${kb.id}/entries`)).data
+  try {
+    const response = await api.get<KnowledgeEntry[]>(`/knowledge-bases/${kb.id}/entries`)
+    selected.value = kb
+    entries.value = response.data
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
 }
 function open(entry?: KnowledgeEntry) {
   editing.value = entry
@@ -60,24 +66,29 @@ async function save() {
   }
 }
 async function removeEntry(entry: KnowledgeEntry) {
-  await ElMessageBox.confirm('删除后将同步移除向量索引，确认继续？', '删除条目', {
-    type: 'warning',
-  })
-  await api.delete(`/knowledge-bases/${entry.knowledge_base_id}/entries/${entry.id}`)
-  await load()
+  try {
+    await ElMessageBox.confirm('删除后将同步移除向量索引，确认继续？', '删除条目', {
+      type: 'warning',
+    })
+    await api.delete(`/knowledge-bases/${entry.knowledge_base_id}/entries/${entry.id}`)
+    await load()
+    ElMessage.success('知识条目已删除')
+  } catch (e) {
+    if (!isDialogCancelled(e)) ElMessage.error((e as Error).message)
+  }
 }
 async function removeKb(kb: KnowledgeBase) {
-  await ElMessageBox.confirm(`确认删除知识库“${kb.name}”及其全部条目？`, '删除知识库', {
-    type: 'warning',
-  })
   try {
+    await ElMessageBox.confirm(`确认删除知识库“${kb.name}”及其全部条目？`, '删除知识库', {
+      type: 'warning',
+    })
     await api.delete(`/knowledge-bases/${kb.id}`)
     selected.value = undefined
     entries.value = []
     await load()
     ElMessage.success('知识库已删除')
   } catch (e) {
-    ElMessage.error((e as Error).message)
+    if (!isDialogCancelled(e)) ElMessage.error((e as Error).message)
   }
 }
 async function upload() {
@@ -138,7 +149,7 @@ onMounted(load)
                 嵌入模型：{{ selected.embedding_model }}
               </span>
             </div>
-            ><el-button v-if="selected" type="primary" plain :icon="Plus" @click="open()"
+            <el-button v-if="selected" type="primary" plain :icon="Plus" @click="open()"
               >新增条目</el-button
             >
           </div></template

@@ -11,6 +11,7 @@ vi.mock('../src/api', () => ({
 
 describe('KnowledgeView', () => {
   beforeEach(() => {
+    apiMocks.get.mockReset()
     apiMocks.get.mockResolvedValue({
       data: [
         {
@@ -24,6 +25,32 @@ describe('KnowledgeView', () => {
       ],
     })
     apiMocks.delete.mockReset()
+  })
+
+  it('keeps the current selection unchanged when loading entries fails', async () => {
+    apiMocks.get
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 'kb-1',
+            name: '演示知识库',
+            description: '',
+            embedding_model: 'qwen3-embedding:0.6b',
+            entry_count: 1,
+            created_at: '2026-08-08T00:00:00Z',
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new Error('条目加载失败'))
+    const errorMessage = vi.spyOn(ElMessage, 'error').mockImplementation(() => undefined as never)
+    const wrapper = mount(KnowledgeView, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+
+    await wrapper.find('.evidence-card').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('选择左侧知识库查看条目')
+    expect(errorMessage).toHaveBeenCalledWith('条目加载失败')
   })
 
   it('shows the embedding model without implementation copy', async () => {

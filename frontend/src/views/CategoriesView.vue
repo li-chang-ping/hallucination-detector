@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { Category, CategoryVersion, Severity } from '../types'
-import { categorySnapshotStatus, formatTime } from '../utils'
+import { categorySnapshotStatus, formatTime, isDialogCancelled } from '../utils'
 
 const categories = ref<Category[]>([])
 const visible = ref(false)
@@ -62,11 +62,19 @@ async function save() {
   }
 }
 async function archive(item: Category) {
-  await ElMessageBox.confirm(`确认归档“${item.name}”？`, '归档分类', { type: 'warning' })
   try {
+    await ElMessageBox.confirm(`确认归档“${item.name}”？`, '归档分类', { type: 'warning' })
     await api.delete(`/categories/${item.id}`)
     await load()
   } catch (e) {
+    if (!isDialogCancelled(e)) ElMessage.error((e as Error).message)
+  }
+}
+async function toggleActive(item: Category, active: boolean) {
+  try {
+    await api.put(`/categories/${item.id}`, { is_active: active })
+  } catch (e) {
+    item.is_active = !active
     ElMessage.error((e as Error).message)
   }
 }
@@ -81,13 +89,13 @@ async function openHistory(item: Category) {
 }
 async function rollback(version: CategoryVersion) {
   if (!historyCategory.value) return
-  await ElMessageBox.confirm(
-    '确认恢复到这个历史版本？当前定义也会保留为可回退版本。',
-    '回退分类定义',
-    { type: 'warning' },
-  )
-  rollbackBusy.value = version.id
   try {
+    await ElMessageBox.confirm(
+      '确认恢复到这个历史版本？当前定义也会保留为可回退版本。',
+      '回退分类定义',
+      { type: 'warning' },
+    )
+    rollbackBusy.value = version.id
     const categoryId = historyCategory.value.id
     await api.post(`/categories/${categoryId}/rollback/${version.id}`)
     ElMessage.success('分类定义已回退')
@@ -95,7 +103,7 @@ async function rollback(version: CategoryVersion) {
     const current = categories.value.find((item) => item.id === categoryId)
     if (current) await openHistory(current)
   } catch (e) {
-    ElMessage.error((e as Error).message)
+    if (!isDialogCancelled(e)) ElMessage.error((e as Error).message)
   } finally {
     rollbackBusy.value = undefined
   }
@@ -145,7 +153,7 @@ onMounted(load)
             v-model="row.is_active"
             :disabled="row.is_archived"
             @change="
-              api.put(`/categories/${row.id}`, { is_active: row.is_active })
+              (value: string | number | boolean) => toggleActive(row, Boolean(value))
             " /></template></el-table-column
       ><el-table-column label="操作" width="195"
         ><template #default="{ row }"
