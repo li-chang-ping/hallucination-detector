@@ -38,7 +38,6 @@
 ├─ data/
 │  ├─ app.db                 # 本地 SQLite 数据，不提交
 │  └─ chroma/                # Chroma 持久化数据，不提交
-├─ docs/CODE_STANDARDS.md    # 前后端代码规范
 ├─ .env.example              # 配置示例
 └─ AGENTS.md                 # 本项目协作与运行说明
 ```
@@ -181,11 +180,29 @@ backend\.venv\Scripts\python.exe scripts\prepare_demo.py "0110附件\task4_repli
 
 ## 代码质量
 
+- 函数保持单一职责，外部 I/O 与领域逻辑分离；禁止在路由或 Vue 模板中堆叠复杂业务逻辑。
+- API、数据库模型和前端类型使用一致命名；时间统一存储为 UTC ISO 8601。
 - 实现功能时必须包含必要的测试；修复缺陷时先补充能够复现问题的测试。
 - Python 提交前运行 Ruff、mypy 和 pytest。
 - 前端提交前运行 ESLint、Prettier check、vue-tsc、Vitest，并按风险执行生产构建。
 - 注释用于说明业务规则、状态转换和非直观实现，不重复代码表面含义。
 - 不得为了通过检查而削弱类型、跳过测试或隐藏真实错误。
+
+### Python / FastAPI
+
+- 使用 Python 3.12、四空格缩进和完整类型标注。
+- 路由只负责协议转换，业务逻辑放在 `services`，外部系统调用封装在独立客户端或服务中。
+- 所有 API 输入输出使用 Pydantic 模型校验。
+- 捕获异常时转换为可定位且不泄露密钥、请求正文等敏感信息的错误。
+- SQLAlchemy 事务边界必须明确；SQLite 与 Chroma 的跨存储变更失败时执行补偿或返回明确失败，不允许静默产生不一致数据。
+
+### Vue / TypeScript
+
+- 使用 Vue 3 Composition API 和 `<script setup lang="ts">`，保持 TypeScript strict。
+- Pinia 用于确有必要的跨页面共享状态；页面组件负责组织流程，可复用表单和展示逻辑下沉为组件或工具。
+- API 响应必须声明 TypeScript 类型，不使用无依据的 `any` 绕过校验。
+- 所有异步写操作必须提供加载、成功和失败反馈；乐观更新失败时恢复界面状态。
+- 删除、归档、回退等危险操作必须二次确认；用户取消确认不显示错误，真实接口失败必须展示可理解的原因。
 
 ## Git 提交
 
