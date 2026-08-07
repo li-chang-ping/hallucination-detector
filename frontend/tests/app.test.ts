@@ -10,7 +10,7 @@ describe('App', () => {
       routes: [{ path: '/', component: { template: '<div />' } }],
     })
     const wrapper = mount(App, { global: { plugins: [ElementPlus, router] } })
-    expect(wrapper.text()).toContain('GroundLens')
+    expect(wrapper.text()).toContain('客服回复幻觉检测')
     expect(wrapper.text()).toContain('检测任务')
   })
 })
