@@ -18,7 +18,9 @@ from app.schemas.knowledge import (
 )
 from app.services.knowledge import (
     KnowledgeBaseInUseError,
+    KnowledgeEntryConflictError,
     add_entry,
+    delete_entry,
     delete_knowledge_base,
     entry_counts,
     import_knowledge_base,
@@ -98,7 +100,12 @@ def list_entries(knowledge_base_id: str, session: DbSession) -> list[KnowledgeEn
 def create_entry(
     knowledge_base_id: str, data: KnowledgeEntryCreate, session: DbSession, vectors: Vectors
 ) -> KnowledgeEntry:
-    return add_entry(session, kb_or_404(session, knowledge_base_id), data, vectors)
+    try:
+        return add_entry(session, kb_or_404(session, knowledge_base_id), data, vectors)
+    except KnowledgeEntryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VectorStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.put("/{knowledge_base_id}/entries/{entry_id}", response_model=KnowledgeEntryRead)
@@ -109,7 +116,12 @@ def edit_entry(
     session: DbSession,
     vectors: Vectors,
 ) -> KnowledgeEntry:
-    return update_entry(session, entry_or_404(session, knowledge_base_id, entry_id), data, vectors)
+    try:
+        return update_entry(
+            session, entry_or_404(session, knowledge_base_id, entry_id), data, vectors
+        )
+    except VectorStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.delete("/{knowledge_base_id}/entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -117,9 +129,10 @@ def remove_entry(
     knowledge_base_id: str, entry_id: str, session: DbSession, vectors: Vectors
 ) -> None:
     entry = entry_or_404(session, knowledge_base_id, entry_id)
-    vectors.delete_entry(knowledge_base_id, entry.id)
-    session.delete(entry)
-    session.commit()
+    try:
+        delete_entry(session, entry, vectors)
+    except VectorStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.delete("/{knowledge_base_id}", status_code=status.HTTP_204_NO_CONTENT)

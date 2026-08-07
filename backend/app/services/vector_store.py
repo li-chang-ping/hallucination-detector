@@ -49,19 +49,40 @@ class VectorStore:
         documents: list[str],
         metadatas: list[dict[str, Any]],
     ) -> None:
-        collection = self.chroma.get_or_create_collection(
-            self.collection_name(knowledge_base_id),
-            metadata={"embedding_model": self.settings.ollama_embed_model, "hnsw:space": "cosine"},
-        )
-        collection.upsert(
-            ids=ids,
-            embeddings=cast(Any, self.embed(documents)),
-            documents=documents,
-            metadatas=cast(Any, metadatas),
-        )
+        embeddings = self.embed(documents)
+        try:
+            collection = self.chroma.get_or_create_collection(
+                self.collection_name(knowledge_base_id),
+                metadata={
+                    "embedding_model": self.settings.ollama_embed_model,
+                    "hnsw:space": "cosine",
+                },
+            )
+            stored_model = (collection.metadata or {}).get("embedding_model")
+            if stored_model != self.settings.ollama_embed_model:
+                raise VectorStoreError(
+                    f"知识库向量模型为 {stored_model or '未知'}，当前模型为 "
+                    f"{self.settings.ollama_embed_model}，请重建索引"
+                )
+            collection.upsert(
+                ids=ids,
+                embeddings=cast(Any, embeddings),
+                documents=documents,
+                metadatas=cast(Any, metadatas),
+            )
+        except VectorStoreError:
+            raise
+        except Exception as exc:  # Chroma exposes transport-specific exception classes.
+            raise VectorStoreError(f"Chroma 写入失败：{exc}") from exc
 
     def delete_entry(self, knowledge_base_id: str, entry_id: str) -> None:
-        self.chroma.get_collection(self.collection_name(knowledge_base_id)).delete(ids=[entry_id])
+        try:
+            self.chroma.get_collection(self.collection_name(knowledge_base_id)).delete(
+                ids=[entry_id]
+            )
+        except Exception as exc:  # Chroma exposes transport-specific exception classes.
+            if "does not exist" not in str(exc).lower():
+                raise VectorStoreError(f"Chroma 删除知识条目失败：{exc}") from exc
 
     def delete_knowledge_base(self, knowledge_base_id: str) -> None:
         try:
@@ -71,12 +92,24 @@ class VectorStore:
                 raise VectorStoreError(f"Chroma 删除知识库失败: {exc}") from exc
 
     def query(self, knowledge_base_id: str, text: str, limit: int = 5) -> list[dict[str, Any]]:
-        collection = self.chroma.get_collection(self.collection_name(knowledge_base_id))
-        result = collection.query(
-            query_embeddings=cast(Any, self.embed([text])),
-            n_results=limit,
-            include=["documents", "metadatas", "distances"],
-        )
+        embeddings = self.embed([text])
+        try:
+            collection = self.chroma.get_collection(self.collection_name(knowledge_base_id))
+            stored_model = (collection.metadata or {}).get("embedding_model")
+            if stored_model != self.settings.ollama_embed_model:
+                raise VectorStoreError(
+                    f"知识库向量模型为 {stored_model or '未知'}，当前模型为 "
+                    f"{self.settings.ollama_embed_model}，请重建索引"
+                )
+            result = collection.query(
+                query_embeddings=cast(Any, embeddings),
+                n_results=limit,
+                include=["documents", "metadatas", "distances"],
+            )
+        except VectorStoreError:
+            raise
+        except Exception as exc:  # Chroma exposes transport-specific exception classes.
+            raise VectorStoreError(f"Chroma 检索失败：{exc}") from exc
         ids = (result.get("ids") or [[]])[0]
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]

@@ -6,12 +6,15 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.models import DetectionTask, KnowledgeBase, KnowledgeEntry, TaskStatus
-from app.schemas.knowledge import KnowledgeEntryCreate, KnowledgeImport
+from app.schemas.knowledge import KnowledgeEntryCreate, KnowledgeEntryUpdate, KnowledgeImport
 from app.services.knowledge import (
     KnowledgeBaseInUseError,
+    KnowledgeEntryConflictError,
     add_entry,
+    delete_entry,
     delete_knowledge_base,
     import_knowledge_base,
+    update_entry,
 )
 
 
@@ -33,6 +36,11 @@ class FakeVectors:
 
     def delete_knowledge_base(self, _knowledge_base_id: str) -> None:
         self.documents.clear()
+
+
+class FailingDeleteVectors(FakeVectors):
+    def delete_entry(self, _knowledge_base_id: str, _entry_id: str) -> None:
+        raise RuntimeError("Chroma unavailable")
 
 
 def test_import_and_add_entry_sync_vectors() -> None:
@@ -57,6 +65,80 @@ def test_import_and_add_entry_sync_vectors() -> None:
         )
         assert vectors.documents[entry.id] == "不支持货到付款"
         assert len(list(session.scalars(select(KnowledgeEntry)))) == 2
+
+
+def test_add_entry_rejects_duplicate_external_id() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    vectors = FakeVectors()
+    with Session(engine) as session:
+        knowledge_base = import_knowledge_base(
+            session,
+            KnowledgeImport(
+                name="重复条目测试",
+                entries=[KnowledgeEntryCreate(id="same-id", content="原始内容")],
+            ),
+            vectors,
+        )
+
+        with pytest.raises(KnowledgeEntryConflictError, match="same-id"):
+            add_entry(
+                session,
+                knowledge_base,
+                KnowledgeEntryCreate(id="same-id", content="重复内容"),
+                vectors,
+            )
+
+        assert len(list(session.scalars(select(KnowledgeEntry)))) == 1
+        assert list(vectors.documents.values()) == ["原始内容"]
+
+
+def test_update_entry_ignores_explicit_null_values() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    vectors = FakeVectors()
+    with Session(engine) as session:
+        knowledge_base = import_knowledge_base(
+            session,
+            KnowledgeImport(
+                name="空值更新测试",
+                entries=[KnowledgeEntryCreate(id="entry", title="原标题", content="原内容")],
+            ),
+            vectors,
+        )
+        entry = knowledge_base.entries[0]
+
+        updated = update_entry(
+            session,
+            entry,
+            KnowledgeEntryUpdate(title=None, content=None),
+            vectors,
+        )
+
+        assert updated.title == "原标题"
+        assert updated.content == "原内容"
+
+
+def test_delete_entry_rolls_back_database_when_vector_delete_fails() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    vectors = FailingDeleteVectors()
+    with Session(engine) as session:
+        knowledge_base = import_knowledge_base(
+            session,
+            KnowledgeImport(
+                name="删除回滚测试",
+                entries=[KnowledgeEntryCreate(id="entry", content="仍应保留")],
+            ),
+            vectors,
+        )
+        entry = knowledge_base.entries[0]
+        entry_id = entry.id
+
+        with pytest.raises(RuntimeError, match="Chroma unavailable"):
+            delete_entry(session, entry, vectors)
+
+        assert session.get(KnowledgeEntry, entry_id) is not None
 
 
 def test_delete_knowledge_base_rejects_unfinished_task() -> None:
