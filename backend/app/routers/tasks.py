@@ -131,7 +131,12 @@ def resume_task(task_id: str, session: DbSession, runner: Runner) -> DetectionTa
 @router.post("/{task_id}/cancel", response_model=DetectionTaskRead)
 def cancel_task(task_id: str, session: DbSession) -> DetectionTask:
     task = task_or_404(session, task_id)
-    if task.status in {TaskStatus.COMPLETED, TaskStatus.PARTIAL, TaskStatus.CANCELLED}:
+    if task.status in {
+        TaskStatus.COMPLETED,
+        TaskStatus.PARTIAL,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    }:
         raise HTTPException(status_code=409, detail="当前状态不能取消")
     task.status = TaskStatus.CANCELLED
     task.finished_at = utc_now()

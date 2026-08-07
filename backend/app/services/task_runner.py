@@ -26,6 +26,11 @@ class TaskRunner:
         try:
             await self._prepare(task_id)
             await self._detect(task_id)
+        except Exception as exc:
+            with SessionLocal() as session:
+                task = session.get(DetectionTask, task_id)
+                if task is not None:
+                    fail_task(session, task, str(exc))
         finally:
             self.running.pop(task_id, None)
 
@@ -140,6 +145,34 @@ class TaskRunner:
 @lru_cache
 def get_task_runner() -> TaskRunner:
     return TaskRunner()
+
+
+def fail_task(session: Session, task: DetectionTask, message: str) -> None:
+    """将准备阶段的系统错误落到任务和未处理条目，避免任务永久停在准备中。"""
+    if task.status in {
+        TaskStatus.PAUSED,
+        TaskStatus.CANCELLED,
+        TaskStatus.COMPLETED,
+        TaskStatus.PARTIAL,
+        TaskStatus.FAILED,
+    }:
+        return
+    items = list(
+        session.scalars(
+            select(DetectionItem).where(
+                DetectionItem.task_id == task.id,
+                DetectionItem.status.in_(["pending", "running"]),
+            )
+        )
+    )
+    for item in items:
+        item.status = "failed"
+        item.error_message = message[:2000]
+    task.error_count += len(items)
+    task.status = TaskStatus.FAILED
+    task.finished_at = utc_now()
+    task.updated_at = utc_now()
+    session.commit()
 
 
 def recover_interrupted_tasks() -> None:

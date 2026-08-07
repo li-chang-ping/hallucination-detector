@@ -1,8 +1,12 @@
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
-from app.models import Severity
+from app.db import Base
+from app.models import DetectionItem, DetectionTask, Severity, TaskStatus
 from app.schemas.tasks import DetectionDecision, ReplyBatch, ReplyInput
+from app.services.task_runner import fail_task
 
 
 def test_reply_batch_rejects_duplicate_ids() -> None:
@@ -46,3 +50,34 @@ def test_normal_decision_clears_categories() -> None:
     )
     assert result.category_names == []
     assert result.severity is None
+
+
+def test_preparation_failure_marks_task_and_pending_items_failed() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        task = DetectionTask(
+            name="证据准备失败任务",
+            knowledge_base_id=None,
+            status=TaskStatus.PREPARING,
+            model_name="deepseek-v4-flash",
+            total_count=1,
+        )
+        session.add(task)
+        session.flush()
+        item = DetectionItem(
+            task_id=task.id,
+            input_id="h01",
+            position=0,
+            user_question="问题",
+            system_reply="回复",
+        )
+        session.add(item)
+        session.commit()
+
+        fail_task(session, task, "Chroma 查询失败")
+
+        assert task.status == TaskStatus.FAILED
+        assert task.error_count == 1
+        assert item.status == "failed"
+        assert item.error_message == "Chroma 查询失败"
