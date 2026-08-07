@@ -1,5 +1,3 @@
-from collections import Counter
-
 from app.models import DetectionItem
 from app.schemas.evaluations import GroundTruthItem
 
@@ -33,10 +31,6 @@ def calculate_metrics(
     false_negative_ids: list[str] = []
     category_mismatch_ids: list[str] = []
     category_mismatches: list[dict[str, object]] = []
-    positive_count = 0
-    category_match_count = 0
-    category_totals: Counter[str] = Counter()
-    category_hits: Counter[str] = Counter()
 
     for item_id in common_ids:
         prediction = prediction_map[item_id]
@@ -83,14 +77,6 @@ def calculate_metrics(
             false_negative_ids.append(item_id)
         else:
             tn += 1
-        if actual and truth.hallucination_type:
-            assert expected is not None
-            positive_count += 1
-            category_totals[expected] += 1
-            if prediction.primary_category == expected:
-                category_match_count += 1
-                category_hits[expected] += 1
-
     return {
         "evaluated_count": len(common_ids),
         "ground_truth_count": len(truths),
@@ -101,7 +87,6 @@ def calculate_metrics(
         "fn": fn,
         "precision": _divide(tp, tp + fp),
         "recall": _divide(tp, tp + fn),
-        "f1": _divide(2 * tp, 2 * tp + fp + fn),
         "accuracy": _divide(tp + tn, len(common_ids)),
         "false_positive_ids": false_positive_ids,
         "false_negative_ids": false_negative_ids,
@@ -115,14 +100,5 @@ def calculate_metrics(
         },
         "missing_prediction_ids": sorted(truth_map.keys() - prediction_map.keys()),
         "unmatched_prediction_ids": sorted(prediction_map.keys() - truth_map.keys()),
-        "category_accuracy": _divide(category_match_count, positive_count),
-        "category_stats": {
-            name: {
-                "expected": count,
-                "matched": category_hits[name],
-                "hit_rate": _divide(category_hits[name], count),
-            }
-            for name, count in sorted(category_totals.items())
-        },
     }
 

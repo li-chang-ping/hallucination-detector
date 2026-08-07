@@ -1,5 +1,7 @@
+from datetime import UTC, datetime
+
 from app.models import DetectionItem
-from app.schemas.evaluations import GroundTruthItem
+from app.schemas.evaluations import EvaluationRead, GroundTruthItem
 from app.services.evaluations import calculate_metrics
 
 
@@ -39,7 +41,9 @@ def test_calculate_binary_and_category_metrics() -> None:
     assert metrics["fn"] == 1
     assert metrics["precision"] == 0.5
     assert metrics["false_negative_ids"] == ["h02"]
-    assert metrics["category_accuracy"] == 0.5
+    assert "f1" not in metrics
+    assert "category_accuracy" not in metrics
+    assert "category_stats" not in metrics
 
 
 def test_category_mismatch_is_counted_as_business_false_positive() -> None:
@@ -83,3 +87,22 @@ def test_primary_category_mismatch_is_business_false_positive() -> None:
     assert metrics["tp"] == 0
     assert metrics["fp"] == 1
     assert metrics["category_mismatch_ids"] == ["h03"]
+
+
+def test_evaluation_response_removes_unsupported_historical_metrics() -> None:
+    result = EvaluationRead.model_validate(
+        {
+            "id": "evaluation",
+            "task_id": "task",
+            "metrics": {
+                "recall": 1.0,
+                "f1": 0.9,
+                "category_accuracy": 0.8,
+                "category_stats": {},
+            },
+            "ground_truth_count": 20,
+            "created_at": datetime.now(UTC),
+        }
+    )
+
+    assert result.metrics == {"recall": 1.0}

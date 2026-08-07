@@ -1,13 +1,13 @@
 # GroundLens 智能客服幻觉检测平台
 
-GroundLens 是面向智能客服回复的本地批量审计系统。它使用 Ollama 生成中文知识向量、Chroma 检索证据、DeepSeek 判断回复是否存在幻觉，并可上传人工标注计算漏检、误报和分类命中率。
+GroundLens 是面向智能客服回复的本地批量审计系统。它使用 Ollama 生成中文知识向量、Chroma 检索证据、DeepSeek 判断回复是否存在幻觉，并可上传人工标注计算漏检、误报及具体不一致 case。
 
 ## 核心能力
 
 - 检测任务：JSON 批量导入，支持查看、暂停、继续、取消和进程重启后恢复。
 - 知识库：JSON 导入及条目增改删，向量由 `qwen3-embedding:0.6b` 生成并显式写入 Chroma。
 - 幻觉定义：六类默认体系，可维护描述、严重度、判定指引和启用状态。
-- 人工评测：输出 TP/TN/FP/FN、Precision、Recall、F1、Accuracy、漏检/误报 ID 和分类命中率。
+- 人工评测：输出 TP/TN/FP/FN、Precision、Recall、Accuracy，以及漏检、误报和分类不一致 ID。
 
 ## 幻觉分类体系
 
@@ -93,7 +93,7 @@ powershell -File scripts/quality.ps1
 
 ## 附件实测结果
 
-最终结果必须来自真实 DeepSeek API。完成 API Key 配置和 20 条检测后，将在此记录混淆矩阵、Precision、Recall、F1、Accuracy、漏检和误报 ID，并附上真实页面截图。
+最终结果必须来自真实 DeepSeek API。完成 API Key 配置和 20 条检测后，将在此记录混淆矩阵、Precision、Recall、Accuracy、漏检和误报 ID，并附上真实页面截图。
 
 容易误判的边界包括：知识库只写“未标注”而非明确否定、回复部分正确部分错误、能力限制被写在否定式说明中，以及关键信息遗漏。这些 case 同时依赖检索召回和模型对“无依据肯定”“部分矛盾”的理解。
 

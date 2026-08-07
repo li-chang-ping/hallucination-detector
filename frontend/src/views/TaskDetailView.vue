@@ -105,14 +105,6 @@ onBeforeUnmount(() => timer && clearInterval(timer))
           <span>Precision 准确率</span><strong>{{ percent(latest.metrics.precision) }}</strong
           ><small>误报 {{ latest.metrics.fp }} 条</small>
         </div>
-        <div class="metric-card">
-          <span>F1</span><strong>{{ percent(latest.metrics.f1) }}</strong
-          ><small>综合指标</small>
-        </div>
-        <div class="metric-card">
-          <span>分类命中率</span><strong>{{ percent(latest.metrics.category_accuracy) }}</strong
-          ><small>模型分类与人工分类一致</small>
-        </div>
       </div>
       <el-alert
         v-if="latest.metrics.false_negative_ids?.length"
