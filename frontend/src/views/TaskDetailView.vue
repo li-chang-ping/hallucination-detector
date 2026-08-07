@@ -22,6 +22,10 @@ const route = useRoute(),
   activeItem = ref<DetectionItem>(),
   evaluationFile = ref<UploadRawFile>()
 const suggestionBusy = ref<string>()
+const evaluating = ref(false)
+const evaluationProgress = ref(0)
+const evaluationStage = ref('')
+const evaluationProgressStatus = ref<'' | 'success' | 'exception'>('')
 const suggestionActionLabels = { create: '新增', update: '修改', archive: '归档' } as const
 let timer: number | undefined
 const latest = computed(() => evaluations.value[0]),
@@ -48,14 +52,38 @@ function show(item: DetectionItem) {
 }
 async function evaluate() {
   if (!evaluationFile.value) return ElMessage.warning('请选择人工标注 JSON')
+  if (evaluating.value) return
   const data = new FormData()
   data.append('file', evaluationFile.value)
+  evaluating.value = true
+  evaluationProgress.value = 0
+  evaluationStage.value = '正在上传人工标注'
+  evaluationProgressStatus.value = ''
   try {
-    await api.post(`/evaluations/tasks/${route.params.id}`, data)
-    ElMessage.success('评测完成')
+    await api.post(`/evaluations/tasks/${route.params.id}`, data, {
+      onUploadProgress(event) {
+        if (!event.total) return
+        const uploadPercent = Math.round((event.loaded / event.total) * 30)
+        evaluationProgress.value = Math.min(30, uploadPercent)
+        if (event.loaded >= event.total) {
+          evaluationStage.value = '正在计算指标并分析误判'
+        }
+      },
+    })
+    evaluationProgress.value = 90
+    evaluationStage.value = '正在刷新比较结果'
     await load()
+    evaluationProgress.value = 100
+    evaluationProgressStatus.value = 'success'
+    evaluationStage.value = '比较完成'
+    ElMessage.success('评测完成')
   } catch (e) {
-    ElMessage.error((e as Error).message)
+    const message = (e as Error).message
+    evaluationProgressStatus.value = 'exception'
+    evaluationStage.value = `比较失败：${message}`
+    ElMessage.error(message)
+  } finally {
+    evaluating.value = false
   }
 }
 async function decideSuggestion(suggestion: CategorySuggestion, action: 'apply' | 'reject') {
@@ -217,18 +245,31 @@ onBeforeUnmount(() => timer && clearInterval(timer))
               :limit="1"
               accept=".json"
               :show-file-list="false"
-              :disabled="!canEvaluateTask(task.status)"
+              :disabled="!canEvaluateTask(task.status) || evaluating"
               :on-change="(f: any) => (evaluationFile = f.raw)"
               ><el-button :icon="Upload">选择人工标注</el-button></el-upload
             ><el-button
               type="primary"
-              :disabled="!evaluationFile || !canEvaluateTask(task.status)"
+              :loading="evaluating"
+              :disabled="!evaluationFile || !canEvaluateTask(task.status) || evaluating"
               @click="evaluate"
-              >开始比对</el-button
+              >{{ evaluating ? '正在比较' : '开始比对' }}</el-button
             >
           </div>
         </div></template
       >
+      <div v-if="evaluationStage" class="evaluation-progress">
+        <div class="evaluation-progress-label">
+          <strong>人工标注比较进度</strong>
+          <span>{{ evaluationStage }}</span>
+        </div>
+        <el-progress
+          :percentage="evaluationProgress"
+          :status="evaluationProgressStatus || undefined"
+          :indeterminate="evaluating && evaluationProgress >= 30"
+          :duration="2"
+        />
+      </div>
       <el-table :data="task.items"
         ><el-table-column prop="input_id" label="ID" width="90" /><el-table-column
           prop="user_question"
@@ -318,5 +359,20 @@ onBeforeUnmount(() => timer && clearInterval(timer))
 }
 .suggestion-actions {
   margin-top: 12px;
+}
+.evaluation-progress {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+}
+.evaluation-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
 }
 </style>
