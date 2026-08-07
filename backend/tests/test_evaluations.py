@@ -13,7 +13,12 @@ from app.models import (
     Severity,
 )
 from app.schemas.evaluations import EvaluationRead, GroundTruthItem
-from app.services.evaluations import build_error_cases, calculate_metrics, decide_suggestion
+from app.services.evaluations import (
+    _fallback_analysis,
+    build_error_cases,
+    calculate_metrics,
+    decide_suggestion,
+)
 
 
 def prediction(
@@ -37,7 +42,7 @@ def prediction(
 
 def test_calculate_binary_and_category_metrics() -> None:
     predictions = [
-        prediction("h01", True, "政策与优惠错误"),
+        prediction("h01", True, "政策编造"),
         prediction("h02", False),
         prediction("h03", True, "事实信息编造"),
     ]
@@ -71,7 +76,7 @@ def test_category_mismatch_is_counted_as_business_false_positive() -> None:
     assert metrics["category_mismatches"] == [
         {
             "id": "h08",
-            "expected_category": "政策与优惠错误",
+            "expected_category": "政策偏差",
             "predicted_category": "事实信息编造",
         }
     ]
@@ -131,8 +136,11 @@ def test_build_error_cases_keeps_context_for_analysis() -> None:
     cases = build_error_cases([item], truths, metrics)
 
     assert cases[0]["error_type"] == "false_positive"
-    assert cases[0]["human_category"] == "政策与优惠错误"
+    assert cases[0]["human_category"] == "政策偏差"
     assert cases[0]["predicted_category"] == "事实信息编造"
+    reason, cause = _fallback_analysis(cases[0])
+    assert "人工分类为“政策偏差”" in reason
+    assert "不做任何映射" in cause
 
 
 def test_apply_suggestion_updates_category_and_creates_version() -> None:

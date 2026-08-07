@@ -8,11 +8,11 @@ describe('display utilities', () => {
       formatCategoryMismatches([
         {
           id: 'h08',
-          expected_category: '政策与优惠错误',
+          expected_category: '政策偏差',
           predicted_category: '事实信息编造',
         },
       ]),
-    ).toBe('h08（人工：政策与优惠错误；模型：事实信息编造）')
+    ).toBe('h08（人工：政策偏差；模型：事实信息编造）')
   })
   it('formats category suggestion fields', () => {
     expect(categoryChangeEntries({ prompt_guidance: '优先识别政策条件' })).toEqual([

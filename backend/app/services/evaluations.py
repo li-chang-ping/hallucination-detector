@@ -20,17 +20,6 @@ from app.schemas.evaluations import (
 from app.services.categories import ensure_category_version, record_category_version
 from app.services.deepseek import DeepSeekClient, DeepSeekError
 
-TYPE_MAPPING = {
-    "政策编造": "政策与优惠错误",
-    "政策偏差": "政策与优惠错误",
-    "优惠编造": "政策与优惠错误",
-    "参数编造": "产品参数错误",
-    "信息编造": "事实信息编造",
-    "能力越界": "能力越界",
-    "安全误导": "安全误导",
-    "信息遗漏": "关键信息遗漏",
-}
-
 
 def _divide(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4) if denominator else 0.0
@@ -56,11 +45,7 @@ def calculate_metrics(
         truth = truth_map[item_id]
         predicted = bool(prediction.is_hallucination)
         actual = truth.is_hallucination
-        expected = (
-            TYPE_MAPPING.get(truth.hallucination_type, truth.hallucination_type)
-            if actual and truth.hallucination_type
-            else None
-        )
+        expected = truth.hallucination_type if actual and truth.hallucination_type else None
         category_mismatch = bool(
             predicted and actual and expected and expected != prediction.primary_category
         )
@@ -125,7 +110,7 @@ def calculate_metrics(
 def _expected_category(truth: GroundTruthItem) -> str | None:
     if not truth.is_hallucination or not truth.hallucination_type:
         return None
-    return TYPE_MAPPING.get(truth.hallucination_type, truth.hallucination_type)
+    return truth.hallucination_type
 
 
 def build_error_cases(
@@ -171,7 +156,10 @@ def _fallback_analysis(case: dict[str, object]) -> tuple[str, str]:
             f"人工分类为“{case['human_category']}”，模型分类为“{case['predicted_category']}”，"
             "分类不一致，按当前业务口径计为误报。"
         )
-        cause = "两个分类的适用边界可能重叠，或主分类优先级指引不够明确。"
+        cause = (
+            "人工标注与模型使用的分类名称不同；系统按要求不做任何映射，"
+            "因此即使语义接近也会计为分类不一致。"
+        )
     return reason, cause
 
 
@@ -212,16 +200,9 @@ async def create_evaluation_insights(
                 error_type=key[1],
                 human_category=cast(str | None, case["human_category"]),
                 predicted_category=cast(str | None, case["predicted_category"]),
-                reason=(
-                    cast(EvaluationAnalysisDraft, analysis_draft).reason
-                    if analysis_draft
-                    else fallback_reason
-                ),
-                likely_cause=(
-                    cast(EvaluationAnalysisDraft, analysis_draft).likely_cause
-                    if analysis_draft
-                    else fallback_cause
-                ),
+                # 误报/漏检口径由指标代码确定，不能让模型重新解释或改写人工标签。
+                reason=fallback_reason,
+                likely_cause=fallback_cause,
                 evidence_summary=(
                     cast(EvaluationAnalysisDraft, analysis_draft).evidence_summary
                     if analysis_draft
