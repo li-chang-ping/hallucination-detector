@@ -13,6 +13,6 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 }
 
 & $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -e $backendRoot'[dev]'
+& $venvPython -m pip install -e "${backendRoot}[dev]"
 
 Write-Host 'Python venv 已就绪：backend/.venv'
