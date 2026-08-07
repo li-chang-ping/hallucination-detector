@@ -48,10 +48,7 @@ def import_knowledge_base(
             knowledge_base.id,
             [entry.id for entry in entries],
             [entry.content for entry in entries],
-            [
-                {"external_id": entry.external_id, "title": entry.title}
-                for entry in entries
-            ],
+            [{"external_id": entry.external_id, "title": entry.title} for entry in entries],
         )
         session.commit()
     except Exception:
@@ -123,4 +120,3 @@ def entry_counts(session: Session) -> dict[str, int]:
         )
     )
     return {knowledge_base_id: count for knowledge_base_id, count in rows}
-

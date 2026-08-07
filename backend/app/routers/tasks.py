@@ -138,4 +138,3 @@ def cancel_task(task_id: str, session: DbSession) -> DetectionTask:
     task.updated_at = utc_now()
     session.commit()
     return task
-

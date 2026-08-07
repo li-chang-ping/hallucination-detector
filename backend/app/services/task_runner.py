@@ -96,9 +96,7 @@ class TaskRunner:
                 self._save_error(item_id, str(exc))
 
     @staticmethod
-    def _save_success(
-        item_id: str, decision: DetectionDecision, usage: dict[str, int]
-    ) -> None:
+    def _save_success(item_id: str, decision: DetectionDecision, usage: dict[str, int]) -> None:
         with SessionLocal() as session:
             item = session.get(DetectionItem, item_id)
             if item is None:

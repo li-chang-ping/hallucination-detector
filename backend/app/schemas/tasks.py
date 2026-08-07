@@ -89,4 +89,3 @@ class DetectionTaskRead(BaseModel):
 class DetectionTaskDetail(DetectionTaskRead):
     category_snapshot: list[dict[str, object]]
     items: list[DetectionItemRead]
-

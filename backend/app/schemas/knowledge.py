@@ -53,4 +53,3 @@ class KnowledgeEntryRead(BaseModel):
     extra_metadata: dict[str, object]
     created_at: datetime
     updated_at: datetime
-

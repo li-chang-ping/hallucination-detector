@@ -30,4 +30,3 @@ class Base(DeclarativeBase):
 def get_db() -> Generator[Session]:
     with SessionLocal() as session:
         yield session
-
