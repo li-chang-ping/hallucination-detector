@@ -77,6 +77,23 @@ class DeepSeekClient:
         if not self.settings.deepseek_api_key:
             raise DeepSeekError("未配置 DEEPSEEK_API_KEY")
         allowed_names = {str(item["name"]) for item in categories}
+        missing_names = {
+            str(item["human_category"])
+            for item in error_cases
+            if item.get("human_category") and str(item["human_category"]) not in allowed_names
+        }
+        human_names = {
+            str(item["human_category"]) for item in error_cases if item.get("human_category")
+        }
+        mismatch_sources = {
+            str(item["predicted_category"])
+            for item in error_cases
+            if item.get("predicted_category")
+            and item.get("human_category")
+            and item["predicted_category"] != item["human_category"]
+        }
+        existing_human_names = human_names & allowed_names
+        obsolete_sources = mismatch_sources - human_names
         payload_data = {
             "error_cases": error_cases,
             "current_categories": categories,
@@ -84,14 +101,9 @@ class DeepSeekClient:
                 "人工分类与模型分类按名称完全一致比较，不允许任何映射；"
                 "名称不同即使语义接近也计为误报。"
             ),
-            "missing_human_category_names": sorted(
-                {
-                    str(item["human_category"])
-                    for item in error_cases
-                    if item.get("human_category")
-                    and str(item["human_category"]) not in allowed_names
-                }
-            ),
+            "missing_human_category_names": sorted(missing_names),
+            "existing_human_category_names": sorted(existing_human_names),
+            "obsolete_prediction_category_names": sorted(obsolete_sources),
             "output_json_schema": EvaluationAnalysisResponse.model_json_schema(),
             "requirements": [
                 "逐条解释误判形成原因，analysis 的 input_id 和 error_type 必须与输入一致",
@@ -102,6 +114,10 @@ class DeepSeekClient:
                 "archive 仅用于确认冗余或错误的现有分类，不包含 proposed 字段",
                 "当人工分类名称已经存在，但模型持续选择不属于人工标签的重叠或宽泛分类时，"
                 "优先建议 archive 导致误报的重叠分类，不得重复 create 已有人工分类",
+                "existing_human_category_names 中的分类是需要保留的人工标准分类，不得归档，"
+                "也不得将其反向重命名为模型误选的分类",
+                "obsolete_prediction_category_names 中的分类应优先归档；人工同名分类已经存在时，"
+                "不得把旧分类重命名为该名称",
                 "名称一对一不一致时可用 update 修改 name",
                 "现有宽泛分类对应多个人工分类时，必须 create 每个缺失的人工同名分类",
                 "不得仅修改描述或指引来处理名称不一致，因为这不会改善严格比较结果",
@@ -114,8 +130,23 @@ class DeepSeekClient:
                 "不要输出思维过程",
             ],
         }
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是客服幻觉评测专家。输出 JSON 对象，字段仅为 "
+                    "analyses 和 suggestions。建议必须改善分类边界，"
+                    "且保持通用性。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(payload_data, ensure_ascii=False),
+            },
+        ]
         last_error: Exception | None = None
         for attempt in range(3):
+            content: str | None = None
             try:
                 async with httpx.AsyncClient(timeout=120) as client:
                     response = await client.post(
@@ -123,20 +154,7 @@ class DeepSeekClient:
                         headers={"Authorization": f"Bearer {self.settings.deepseek_api_key}"},
                         json={
                             "model": self.settings.deepseek_model,
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "你是客服幻觉评测专家。输出 JSON 对象，字段仅为 "
-                                        "analyses 和 suggestions。建议必须改善分类边界，"
-                                        "且保持通用性。"
-                                    ),
-                                },
-                                {
-                                    "role": "user",
-                                    "content": json.dumps(payload_data, ensure_ascii=False),
-                                },
-                            ],
+                            "messages": messages,
                             "response_format": {"type": "json_object"},
                             "temperature": 0.1,
                             "max_tokens": 6000,
@@ -144,7 +162,10 @@ class DeepSeekClient:
                         },
                     )
                     response.raise_for_status()
-                    content = response.json()["choices"][0]["message"]["content"]
+                    raw_content = response.json()["choices"][0]["message"]["content"]
+                    if not isinstance(raw_content, str) or not raw_content:
+                        raise ValueError("模型返回空内容或非文本内容")
+                    content = raw_content
                     result = EvaluationAnalysisResponse.model_validate_json(content)
                     expected_cases = {
                         (str(item["input_id"]), str(item["error_type"])) for item in error_cases
@@ -154,24 +175,6 @@ class DeepSeekClient:
                     if missing_cases:
                         missing_ids = ", ".join(sorted(item_id for item_id, _ in missing_cases))
                         raise ValueError(f"缺少误判分析: {missing_ids}")
-                    missing_names = {
-                        str(item["human_category"])
-                        for item in error_cases
-                        if item.get("human_category")
-                        and str(item["human_category"]) not in allowed_names
-                    }
-                    human_names = {
-                        str(item["human_category"])
-                        for item in error_cases
-                        if item.get("human_category")
-                    }
-                    mismatch_sources = {
-                        str(item["predicted_category"])
-                        for item in error_cases
-                        if item.get("predicted_category")
-                        and item.get("human_category")
-                        and item["predicted_category"] != item["human_category"]
-                    }
                     self._validate_suggestions(
                         result,
                         allowed_names,
@@ -183,8 +186,43 @@ class DeepSeekClient:
             except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
                 last_error = exc
                 if attempt < 2:
+                    if content is not None:
+                        messages.extend(
+                            [
+                                {"role": "assistant", "content": content},
+                                {
+                                    "role": "user",
+                                    "content": self._build_evaluation_correction(
+                                        str(exc), existing_human_names, obsolete_sources
+                                    ),
+                                },
+                            ]
+                        )
                     await asyncio.sleep(2**attempt)
         raise DeepSeekError(f"DeepSeek 误判分析连续三次调用失败: {last_error}") from last_error
+
+    @staticmethod
+    def _build_evaluation_correction(
+        validation_error: str,
+        existing_human_names: set[str],
+        obsolete_sources: set[str],
+    ) -> str:
+        """将本地校验错误反馈给模型，要求修正整套建议而不是盲目重试。"""
+        correction = {
+            "validation_error": validation_error,
+            "existing_human_category_names": sorted(existing_human_names),
+            "obsolete_prediction_category_names": sorted(obsolete_sources),
+            "correction_rules": [
+                "重新输出完整 JSON，不要只输出修改片段",
+                "保留已存在的人工标准分类，禁止将其重命名为模型误选分类",
+                "人工标准分类已存在时，优先归档导致误报的旧分类",
+                "不得重命名为任何现有分类名称",
+                "所有 suggestions 必须构成可原子执行且无冲突的完整方案",
+            ],
+        }
+        return "上一次输出未通过后端校验，请根据错误修正整套方案：\n" + json.dumps(
+            correction, ensure_ascii=False
+        )
 
     @staticmethod
     def _validate_suggestions(
