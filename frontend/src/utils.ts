@@ -1,4 +1,4 @@
-import type { TaskStatus } from './types'
+import type { CategoryMismatch, TaskStatus } from './types'
 
 export const statusText: Record<TaskStatus, string> = {
   preparing: '准备证据',
@@ -17,4 +17,13 @@ export function percent(value: unknown): string {
 
 export function formatTime(value: string): string {
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+export function formatCategoryMismatches(items: CategoryMismatch[]): string {
+  return items
+    .map(
+      (item) =>
+        `${item.id}（人工：${item.expected_category}；模型：${item.predicted_categories.join('、') || '无分类'}）`,
+    )
+    .join('；')
 }

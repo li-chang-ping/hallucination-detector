@@ -5,7 +5,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import type { DetectionItem, DetectionTask, Evaluation } from '../types'
-import { percent, statusText } from '../utils'
+import { formatCategoryMismatches, percent, statusText } from '../utils'
 
 const route = useRoute(),
   router = useRouter(),
@@ -125,6 +125,16 @@ onBeforeUnmount(() => timer && clearInterval(timer))
         type="warning"
         :closable="false"
         :title="`误报：${latest.metrics.false_positive_ids.join('、')}`"
+        style="margin-top: 10px" /><el-alert
+        v-if="latest.metrics.category_mismatches?.length"
+        type="error"
+        :closable="false"
+        :title="`分类不一致：${formatCategoryMismatches(latest.metrics.category_mismatches)}`"
+        style="margin-top: 10px" /><el-alert
+        v-if="latest.metrics.primary_category_mismatch_ids?.length"
+        type="info"
+        :closable="false"
+        :title="`主分类不一致：${latest.metrics.primary_category_mismatch_ids.join('、')}（人工分类已包含在模型多标签中时不计误报）`"
         style="margin-top: 10px"
     /></el-card>
     <el-card class="panel" shadow="never"

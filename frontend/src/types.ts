@@ -70,3 +70,10 @@ export interface Evaluation {
   ground_truth_count: number
   created_at: string
 }
+
+export interface CategoryMismatch {
+  id: string
+  expected_category: string
+  predicted_primary_category: string | null
+  predicted_categories: string[]
+}

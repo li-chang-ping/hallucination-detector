@@ -28,8 +28,12 @@ def calculate_metrics(
     truth_map = {item.id: item for item in truths}
     common_ids = sorted(prediction_map.keys() & truth_map.keys())
     tp = tn = fp = fn = 0
+    binary_tp = binary_tn = binary_fp = binary_fn = 0
     false_positive_ids: list[str] = []
     false_negative_ids: list[str] = []
+    category_mismatch_ids: list[str] = []
+    primary_category_mismatch_ids: list[str] = []
+    category_mismatches: list[dict[str, object]] = []
     positive_count = 0
     primary_hits = 0
     multilabel_hits = 0
@@ -41,7 +45,38 @@ def calculate_metrics(
         truth = truth_map[item_id]
         predicted = bool(prediction.is_hallucination)
         actual = truth.is_hallucination
+        expected = (
+            TYPE_MAPPING.get(truth.hallucination_type, truth.hallucination_type)
+            if actual and truth.hallucination_type
+            else None
+        )
+        category_mismatch = bool(
+            predicted and actual and expected and expected not in prediction.category_names
+        )
+
+        # 保留标准二分类矩阵，同时按业务口径将分类未命中计入对外展示的误报。
         if predicted and actual:
+            binary_tp += 1
+        elif predicted and not actual:
+            binary_fp += 1
+        elif not predicted and actual:
+            binary_fn += 1
+        else:
+            binary_tn += 1
+
+        if category_mismatch:
+            fp += 1
+            false_positive_ids.append(item_id)
+            category_mismatch_ids.append(item_id)
+            category_mismatches.append(
+                {
+                    "id": item_id,
+                    "expected_category": expected,
+                    "predicted_primary_category": prediction.primary_category,
+                    "predicted_categories": prediction.category_names,
+                }
+            )
+        elif predicted and actual:
             tp += 1
         elif predicted and not actual:
             fp += 1
@@ -52,11 +87,13 @@ def calculate_metrics(
         else:
             tn += 1
         if actual and truth.hallucination_type:
-            expected = TYPE_MAPPING.get(truth.hallucination_type, truth.hallucination_type)
+            assert expected is not None
             positive_count += 1
             category_totals[expected] += 1
             if prediction.primary_category == expected:
                 primary_hits += 1
+            else:
+                primary_category_mismatch_ids.append(item_id)
             if expected in prediction.category_names:
                 multilabel_hits += 1
                 category_hits[expected] += 1
@@ -75,6 +112,15 @@ def calculate_metrics(
         "accuracy": _divide(tp + tn, len(common_ids)),
         "false_positive_ids": false_positive_ids,
         "false_negative_ids": false_negative_ids,
+        "category_mismatch_ids": category_mismatch_ids,
+        "primary_category_mismatch_ids": primary_category_mismatch_ids,
+        "category_mismatches": category_mismatches,
+        "binary_confusion_matrix": {
+            "tp": binary_tp,
+            "tn": binary_tn,
+            "fp": binary_fp,
+            "fn": binary_fn,
+        },
         "missing_prediction_ids": sorted(truth_map.keys() - prediction_map.keys()),
         "unmatched_prediction_ids": sorted(prediction_map.keys() - truth_map.keys()),
         "primary_category_accuracy": _divide(primary_hits, positive_count),
