@@ -76,9 +76,22 @@ class DeepSeekClient:
         """分析已由确定性指标识别出的误判，不允许模型改写误判清单。"""
         if not self.settings.deepseek_api_key:
             raise DeepSeekError("未配置 DEEPSEEK_API_KEY")
+        allowed_names = {str(item["name"]) for item in categories}
         payload_data = {
             "error_cases": error_cases,
             "current_categories": categories,
+            "evaluation_rule": (
+                "人工分类与模型分类按名称完全一致比较，不允许任何映射；"
+                "名称不同即使语义接近也计为误报。"
+            ),
+            "missing_human_category_names": sorted(
+                {
+                    str(item["human_category"])
+                    for item in error_cases
+                    if item.get("human_category")
+                    and str(item["human_category"]) not in allowed_names
+                }
+            ),
             "output_json_schema": EvaluationAnalysisResponse.model_json_schema(),
             "requirements": [
                 "逐条解释误判形成原因，analysis 的 input_id 和 error_type 必须与输入一致",
@@ -87,12 +100,15 @@ class DeepSeekClient:
                 "create 用于缺少必要分类，target_category_name 是新分类名",
                 "update 可修改 name、description、prompt_guidance、default_severity",
                 "archive 仅用于确认冗余或错误的现有分类，不包含 proposed 字段",
+                "名称一对一不一致时可用 update 修改 name",
+                "现有宽泛分类对应多个人工分类时，必须 create 每个缺失的人工同名分类",
+                "不得仅修改描述或指引来处理名称不一致，因为这不会改善严格比较结果",
+                "同一个目标名称只能选择 create 或重命名其中一种，不得生成冲突建议",
                 "存在误判时至少给出一条可执行的分类优化建议",
-                "不要建议新增分类，不要输出思维过程",
+                "不要输出思维过程",
             ],
         }
         last_error: Exception | None = None
-        allowed_names = {str(item["name"]) for item in categories}
         for attempt in range(3):
             try:
                 async with httpx.AsyncClient(timeout=120) as client:
@@ -124,26 +140,50 @@ class DeepSeekClient:
                     response.raise_for_status()
                     content = response.json()["choices"][0]["message"]["content"]
                     result = EvaluationAnalysisResponse.model_validate_json(content)
-                    unknown = {
-                        item.target_category_name
-                        for item in result.suggestions
-                        if item.action in {"update", "archive"}
-                    } - allowed_names
-                    if unknown:
-                        raise ValueError(f"优化建议包含未知分类: {', '.join(sorted(unknown))}")
-                    duplicates = {
-                        item.target_category_name
-                        for item in result.suggestions
-                        if item.action == "create" and item.target_category_name in allowed_names
+                    missing_names = {
+                        str(item["human_category"])
+                        for item in error_cases
+                        if item.get("human_category")
+                        and str(item["human_category"]) not in allowed_names
                     }
-                    if duplicates:
-                        raise ValueError(f"新增建议使用了已有分类: {', '.join(sorted(duplicates))}")
+                    self._validate_suggestions(result, allowed_names, missing_names)
                     return result
             except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
                 last_error = exc
                 if attempt < 2:
                     await asyncio.sleep(2**attempt)
         raise DeepSeekError(f"DeepSeek 误判分析连续三次调用失败: {last_error}") from last_error
+
+    @staticmethod
+    def _validate_suggestions(
+        result: EvaluationAnalysisResponse,
+        allowed_names: set[str],
+        missing_names: set[str],
+    ) -> None:
+        unknown = {
+            item.target_category_name
+            for item in result.suggestions
+            if item.action in {"update", "archive"}
+        } - allowed_names
+        if unknown:
+            raise ValueError(f"优化建议包含未知分类: {', '.join(sorted(unknown))}")
+        create_names = {
+            item.target_category_name for item in result.suggestions if item.action == "create"
+        }
+        duplicates = create_names & allowed_names
+        if duplicates:
+            raise ValueError(f"新增建议使用了已有分类: {', '.join(sorted(duplicates))}")
+        renamed_names = {
+            item.proposed_name
+            for item in result.suggestions
+            if item.action == "update" and item.proposed_name
+        }
+        conflicts = create_names & renamed_names
+        if conflicts:
+            raise ValueError(f"新增与重命名建议冲突: {', '.join(sorted(conflicts))}")
+        unresolved = missing_names - create_names - renamed_names
+        if unresolved:
+            raise ValueError(f"缺少分类名称对齐建议: {', '.join(sorted(unresolved))}")
 
     @staticmethod
     def _system_prompt() -> str:
