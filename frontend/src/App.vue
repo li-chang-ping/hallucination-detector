@@ -15,7 +15,7 @@ const activeMenu = computed(() => {
     <el-aside width="248px" class="sidebar">
       <div class="brand">
         <div class="brand-mark"><MagicStick /></div>
-        <div><strong>客服回复幻觉检测</strong><span>幻觉检测平台</span></div>
+        <div><strong>客服回复幻觉检测</strong></div>
       </div>
       <el-menu :default-active="activeMenu" router class="nav-menu">
         <el-menu-item index="/tasks"

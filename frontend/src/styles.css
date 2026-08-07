@@ -48,19 +48,11 @@ body {
 .brand-mark svg {
   width: 23px;
 }
-.brand strong,
-.brand span {
-  display: block;
-}
 .brand strong {
+  display: block;
   white-space: nowrap;
   font-size: 16px;
   letter-spacing: 0.3px;
-}
-.brand span {
-  margin-top: 4px;
-  color: #8f9bb5;
-  font-size: 12px;
 }
 .nav-menu {
   border: 0 !important;
