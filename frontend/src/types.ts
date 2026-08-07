@@ -63,7 +63,7 @@ export interface DetectionItem {
 export interface DetectionTask {
   id: string
   name: string
-  knowledge_base_id: string
+  knowledge_base_id: string | null
   status: TaskStatus
   model_name: string
   total_count: number

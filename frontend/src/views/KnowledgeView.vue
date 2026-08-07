@@ -70,10 +70,15 @@ async function removeKb(kb: KnowledgeBase) {
   await ElMessageBox.confirm(`确认删除知识库“${kb.name}”及其全部条目？`, '删除知识库', {
     type: 'warning',
   })
-  await api.delete(`/knowledge-bases/${kb.id}`)
-  selected.value = undefined
-  entries.value = []
-  await load()
+  try {
+    await api.delete(`/knowledge-bases/${kb.id}`)
+    selected.value = undefined
+    entries.value = []
+    await load()
+    ElMessage.success('知识库已删除')
+  } catch (e) {
+    ElMessage.error((e as Error).message)
+  }
 }
 async function upload() {
   if (!importFile.value) return
