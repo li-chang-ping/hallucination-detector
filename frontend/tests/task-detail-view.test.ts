@@ -23,9 +23,37 @@ const task = {
 }
 let evaluationData: unknown[] = []
 
+class MockEventSource {
+  static instances: MockEventSource[] = []
+  listeners = new Map<string, Array<(event: MessageEvent<string>) => void>>()
+  onerror: (() => void) | null = null
+  closed = false
+
+  constructor(public url: string) {
+    MockEventSource.instances.push(this)
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
+    const listeners = this.listeners.get(type) || []
+    listeners.push(listener)
+    this.listeners.set(type, listeners)
+  }
+
+  emit(type: string, data: object) {
+    const event = new MessageEvent(type, { data: JSON.stringify(data) })
+    for (const listener of this.listeners.get(type) || []) listener(event)
+  }
+
+  close() {
+    this.closed = true
+  }
+}
+
 describe('TaskDetailView', () => {
   beforeEach(() => {
     evaluationData = []
+    MockEventSource.instances = []
+    vi.stubGlobal('EventSource', MockEventSource)
     apiMocks.get.mockReset()
     apiMocks.post.mockReset()
     apiMocks.get.mockImplementation((url: string) =>
@@ -74,7 +102,6 @@ describe('TaskDetailView', () => {
   })
 
   it('shows loading and comparison progress until evaluation completes', async () => {
-    let resolvePost: (() => void) | undefined
     apiMocks.post.mockImplementation(
       (
         _url: string,
@@ -82,8 +109,21 @@ describe('TaskDetailView', () => {
         config: { onUploadProgress: (event: { loaded: number; total: number }) => void },
       ) => {
         config.onUploadProgress({ loaded: 100, total: 100 })
-        return new Promise((resolve) => {
-          resolvePost = () => resolve({ data: {} })
+        return Promise.resolve({
+          data: {
+            id: 'evaluation-stream',
+            task_id: 'task-1',
+            metrics: { recall: 1, accuracy: 1, evaluated_count: 1, tp: 1, tn: 0 },
+            ground_truth_count: 1,
+            insight_status: 'pending',
+            insight_error: null,
+            insight_progress: 10,
+            insight_stage: '人工标注校验完成，已创建后台评测',
+            insight_events: [],
+            created_at: '2026-08-08T00:00:00Z',
+            analyses: [],
+            suggestions: [],
+          },
         })
       },
     )
@@ -115,17 +155,92 @@ describe('TaskDetailView', () => {
     expect(loadingButton).toBeDefined()
     expect(loadingButton!.classes()).toContain('is-loading')
     expect(wrapper.text()).toContain('人工标注比较进度')
-    expect(wrapper.text()).toContain('正在计算指标并分析误判')
+    expect(wrapper.text()).toContain('人工标注校验完成，已创建后台评测')
+    const stream = MockEventSource.instances[0]
+    expect(stream.url).toBe('/api/v1/evaluations/evaluation-stream/events')
 
-    resolvePost?.()
+    stream.emit('progress', {
+      sequence: 2,
+      stage: '发现 2 条误判，正在准备分析上下文',
+      progress: 35,
+      status: 'running',
+      created_at: '2026-08-08T00:00:01Z',
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('发现 2 条误判，正在准备分析上下文')
+    expect(wrapper.text()).toContain('35%')
+
+    evaluationData = [
+      {
+        id: 'evaluation-stream',
+        task_id: 'task-1',
+        metrics: { recall: 1, accuracy: 1, evaluated_count: 1, tp: 1, tn: 0 },
+        ground_truth_count: 1,
+        insight_status: 'completed',
+        insight_error: null,
+        insight_progress: 100,
+        insight_stage: '已保存 2 条误判分析和 2 条优化建议',
+        insight_events: [],
+        created_at: '2026-08-08T00:00:00Z',
+        analyses: [],
+        suggestions: [],
+      },
+    ]
+    stream.emit('complete', { status: 'completed' })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('比较完成')
+    expect(wrapper.text()).toContain('已保存 2 条误判分析和 2 条优化建议')
+    expect(stream.closed).toBe(true)
     const completedButton = wrapper
       .findAll('button')
       .find((button) => button.text().includes('开始比对'))
     expect(completedButton).toBeDefined()
     expect(completedButton!.classes()).not.toContain('is-loading')
+    wrapper.unmount()
+  })
+
+  it('reconnects to an unfinished evaluation after refreshing the page', async () => {
+    const runningEvaluation = {
+      id: 'evaluation-running',
+      task_id: 'task-1',
+      metrics: { recall: 0.8, accuracy: 0.8, evaluated_count: 20, tp: 16, tn: 0 },
+      ground_truth_count: 20,
+      insight_status: 'running',
+      insight_error: null,
+      insight_progress: 52,
+      insight_stage: 'DeepSeek 已返回结果，正在校验完整优化方案',
+      insight_events: [
+        {
+          sequence: 1,
+          stage: '正在请求 DeepSeek 生成误判分析与优化建议（第 1/3 次）',
+          progress: 45,
+          status: 'running',
+          created_at: '2026-08-08T00:00:01Z',
+        },
+      ],
+      created_at: '2026-08-08T00:00:00Z',
+      analyses: [],
+      suggestions: [],
+    }
+    evaluationData = [runningEvaluation]
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/tasks/:id', component: TaskDetailView }],
+    })
+    await router.push('/tasks/task-1')
+    await router.isReady()
+    const wrapper = mount(TaskDetailView, { global: { plugins: [ElementPlus, router] } })
+    await flushPromises()
+
+    expect(MockEventSource.instances).toHaveLength(1)
+    expect(wrapper.text()).toContain('DeepSeek 已返回结果，正在校验完整优化方案')
+    expect(wrapper.text()).toContain('正在请求 DeepSeek 生成误判分析与优化建议（第 1/3 次）')
+
+    evaluationData = [{ ...runningEvaluation, insight_status: 'completed', insight_progress: 100 }]
+    MockEventSource.instances[0].emit('complete', { status: 'completed' })
+    await flushPromises()
+
+    expect(MockEventSource.instances[0].closed).toBe(true)
     wrapper.unmount()
   })
 

@@ -79,11 +79,22 @@ export interface Evaluation {
   task_id: string
   metrics: Record<string, any>
   ground_truth_count: number
-  insight_status: 'pending' | 'completed' | 'fallback' | 'unknown'
+  insight_status: 'pending' | 'running' | 'completed' | 'fallback' | 'unknown'
   insight_error: string | null
+  insight_progress: number
+  insight_stage: string
+  insight_events: EvaluationProgressEvent[]
   created_at: string
   analyses: EvaluationAnalysis[]
   suggestions: CategorySuggestion[]
+}
+
+export interface EvaluationProgressEvent {
+  sequence: number
+  stage: string
+  progress: number
+  status: string
+  created_at: string
 }
 
 export interface EvaluationAnalysis {

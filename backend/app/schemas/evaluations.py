@@ -105,6 +105,9 @@ class EvaluationRead(BaseModel):
     ground_truth_count: int
     insight_status: str = "unknown"
     insight_error: str | None = None
+    insight_progress: int = 0
+    insight_stage: str = "等待分析"
+    insight_events: list[dict[str, object]] = Field(default_factory=list)
     created_at: datetime
     analyses: list[EvaluationAnalysisRead] = Field(default_factory=list)
     suggestions: list[CategorySuggestionRead] = Field(default_factory=list)

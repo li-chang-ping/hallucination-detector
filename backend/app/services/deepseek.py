@@ -1,5 +1,6 @@
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -72,6 +73,7 @@ class DeepSeekClient:
         self,
         error_cases: list[dict[str, object]],
         categories: list[dict[str, object]],
+        progress_callback: Callable[[str, int], None] | None = None,
     ) -> EvaluationAnalysisResponse:
         """分析已由确定性指标识别出的误判，不允许模型改写误判清单。"""
         if not self.settings.deepseek_api_key:
@@ -148,6 +150,11 @@ class DeepSeekClient:
         for attempt in range(3):
             content: str | None = None
             try:
+                if progress_callback:
+                    progress_callback(
+                        f"正在请求 DeepSeek 生成误判分析与优化建议（第 {attempt + 1}/3 次）",
+                        45 + attempt * 15,
+                    )
                 async with httpx.AsyncClient(timeout=120) as client:
                     response = await client.post(
                         f"{self.settings.deepseek_base_url}/chat/completions",
@@ -166,6 +173,11 @@ class DeepSeekClient:
                     if not isinstance(raw_content, str) or not raw_content:
                         raise ValueError("模型返回空内容或非文本内容")
                     content = raw_content
+                    if progress_callback:
+                        progress_callback(
+                            "DeepSeek 已返回结果，正在校验完整优化方案",
+                            52 + attempt * 15,
+                        )
                     result = EvaluationAnalysisResponse.model_validate_json(content)
                     expected_cases = {
                         (str(item["input_id"]), str(item["error_type"])) for item in error_cases
@@ -182,10 +194,18 @@ class DeepSeekClient:
                         mismatch_sources=mismatch_sources,
                         human_names=human_names,
                     )
+                    if progress_callback:
+                        progress_callback("优化方案校验通过，正在保存结果", 92)
                     return result
             except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
                 last_error = exc
                 if attempt < 2:
+                    if progress_callback:
+                        detail = str(exc) if content is not None else "DeepSeek 请求失败"
+                        progress_callback(
+                            f"第 {attempt + 1} 次结果未通过：{detail}；正在修正并重试",
+                            min(58 + attempt * 15, 88),
+                        )
                     if content is not None:
                         messages.extend(
                             [

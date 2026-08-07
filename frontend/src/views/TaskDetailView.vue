@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox, type UploadRawFile } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
-import type { DetectionItem, DetectionTask, Evaluation } from '../types'
+import type { DetectionItem, DetectionTask, Evaluation, EvaluationProgressEvent } from '../types'
 import {
   canEvaluateTask,
   categoryChangeEntries,
@@ -27,8 +27,10 @@ const evaluating = ref(false)
 const evaluationProgress = ref(0)
 const evaluationStage = ref('')
 const evaluationProgressStatus = ref<'' | 'success' | 'exception'>('')
+const evaluationEvents = ref<EvaluationProgressEvent[]>([])
 const suggestionActionLabels = { create: '新增', update: '修改', archive: '归档' } as const
 let timer: number | undefined
+let evaluationSource: EventSource | undefined
 const latest = computed(() => evaluations.value[0]),
   hasPendingSuggestionPlan = computed(
     () =>
@@ -64,25 +66,36 @@ async function evaluate() {
   evaluating.value = true
   evaluationProgress.value = 0
   evaluationStage.value = '正在上传人工标注'
+  evaluationEvents.value = []
   evaluationProgressStatus.value = ''
   try {
-    await api.post(`/evaluations/tasks/${route.params.id}`, data, {
+    const response = await api.post<Evaluation>(`/evaluations/tasks/${route.params.id}`, data, {
       onUploadProgress(event) {
         if (!event.total) return
-        const uploadPercent = Math.round((event.loaded / event.total) * 30)
-        evaluationProgress.value = Math.min(30, uploadPercent)
+        const uploadPercent = Math.round((event.loaded / event.total) * 10)
+        evaluationProgress.value = Math.min(10, uploadPercent)
         if (event.loaded >= event.total) {
-          evaluationStage.value = '正在计算指标并分析误判'
+          evaluationStage.value = '人工标注已上传，正在创建后台评测'
         }
       },
     })
-    evaluationProgress.value = 90
-    evaluationStage.value = '正在刷新比较结果'
+    evaluations.value = [response.data, ...evaluations.value]
+    evaluationProgress.value = response.data.insight_progress
+    evaluationStage.value = response.data.insight_stage
+    evaluationEvents.value = response.data.insight_events || []
+    await subscribeEvaluation(response.data.id)
     await load()
+    const completed = evaluations.value.find((item) => item.id === response.data.id)
     evaluationProgress.value = 100
-    evaluationProgressStatus.value = 'success'
-    evaluationStage.value = '比较完成'
-    ElMessage.success('评测完成')
+    if (completed?.insight_status === 'fallback') {
+      evaluationProgressStatus.value = 'exception'
+      evaluationStage.value = completed.insight_stage
+      ElMessage.warning('比较完成，但 AI 优化建议生成失败')
+    } else {
+      evaluationProgressStatus.value = 'success'
+      evaluationStage.value = completed?.insight_stage || '比较完成'
+      ElMessage.success('评测完成')
+    }
   } catch (e) {
     const message = (e as Error).message
     evaluationProgressStatus.value = 'exception'
@@ -90,6 +103,68 @@ async function evaluate() {
     ElMessage.error(message)
   } finally {
     evaluating.value = false
+  }
+}
+
+function subscribeEvaluation(evaluationId: string) {
+  return new Promise<void>((resolve, reject) => {
+    evaluationSource?.close()
+    const source = new EventSource(`/api/v1/evaluations/${evaluationId}/events`)
+    evaluationSource = source
+    let finished = false
+    source.addEventListener('progress', (event) => {
+      const progressEvent = JSON.parse(
+        (event as MessageEvent<string>).data,
+      ) as EvaluationProgressEvent
+      evaluationProgress.value = progressEvent.progress
+      evaluationStage.value = progressEvent.stage
+      if (!evaluationEvents.value.some((item) => item.sequence === progressEvent.sequence)) {
+        evaluationEvents.value.push(progressEvent)
+      }
+    })
+    source.addEventListener('complete', () => {
+      finished = true
+      source.close()
+      evaluationSource = undefined
+      resolve()
+    })
+    source.addEventListener('failed', (event) => {
+      finished = true
+      source.close()
+      evaluationSource = undefined
+      const payload = JSON.parse((event as MessageEvent<string>).data) as { stage?: string }
+      reject(new Error(payload.stage || '评测事件流失败'))
+    })
+    source.onerror = () => {
+      if (finished) return
+      source.close()
+      evaluationSource = undefined
+      reject(new Error('评测进度连接中断，请刷新页面查看最新结果'))
+    }
+  })
+}
+
+async function initialize() {
+  await load()
+  const current = latest.value
+  if (current && ['pending', 'running'].includes(current.insight_status)) {
+    evaluating.value = true
+    evaluationProgress.value = current.insight_progress
+    evaluationStage.value = current.insight_stage
+    evaluationEvents.value = current.insight_events || []
+    try {
+      await subscribeEvaluation(current.id)
+      await load()
+      evaluationProgress.value = 100
+      evaluationStage.value = latest.value?.insight_stage || '比较完成'
+      evaluationProgressStatus.value =
+        latest.value?.insight_status === 'fallback' ? 'exception' : 'success'
+    } catch (e) {
+      evaluationProgressStatus.value = 'exception'
+      evaluationStage.value = (e as Error).message
+    } finally {
+      evaluating.value = false
+    }
   }
 }
 async function decideSuggestionPlan(action: 'apply' | 'reject') {
@@ -112,10 +187,13 @@ async function decideSuggestionPlan(action: 'apply' | 'reject') {
   }
 }
 onMounted(() => {
-  load()
+  void initialize()
   timer = window.setInterval(load, 2500)
 })
-onBeforeUnmount(() => timer && clearInterval(timer))
+onBeforeUnmount(() => {
+  if (timer) clearInterval(timer)
+  evaluationSource?.close()
+})
 </script>
 <template>
   <div class="page-heading">
@@ -317,6 +395,13 @@ onBeforeUnmount(() => timer && clearInterval(timer))
           :indeterminate="evaluating && evaluationProgress >= 30"
           :duration="2"
         />
+        <div v-if="evaluationEvents.length" class="evaluation-event-list">
+          <div v-for="event in evaluationEvents" :key="event.sequence" class="evaluation-event">
+            <span class="evaluation-event-dot" />
+            <span>{{ event.stage }}</span>
+            <small>{{ event.progress }}%</small>
+          </div>
+        </div>
       </div>
       <el-table :data="task.items"
         ><el-table-column prop="input_id" label="ID" width="90" /><el-table-column
@@ -429,5 +514,31 @@ onBeforeUnmount(() => timer && clearInterval(timer))
   margin-bottom: 8px;
   color: var(--el-text-color-regular);
   font-size: 13px;
+}
+.evaluation-event-list {
+  display: grid;
+  gap: 7px;
+  max-height: 190px;
+  margin-top: 12px;
+  padding-top: 10px;
+  overflow-y: auto;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.evaluation-event {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+.evaluation-event-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--el-color-primary);
+}
+.evaluation-event small {
+  color: var(--el-text-color-secondary);
 }
 </style>

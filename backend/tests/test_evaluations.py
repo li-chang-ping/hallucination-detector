@@ -24,6 +24,7 @@ from app.services.evaluations import (
     create_evaluation_insights,
     decide_suggestion,
     decide_suggestion_plan,
+    record_evaluation_progress,
     validate_ground_truth_ids,
 )
 
@@ -156,6 +157,31 @@ def test_evaluation_response_removes_unsupported_historical_metrics() -> None:
     )
 
     assert result.metrics == {"recall": 1.0}
+
+
+def test_evaluation_progress_is_persisted_as_replayable_events() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        evaluation = Evaluation(task_id="task", metrics={}, ground_truth_count=1)
+        session.add(evaluation)
+        session.commit()
+
+        record_evaluation_progress(
+            session,
+            evaluation,
+            "发现 2 条误判，正在准备分析上下文",
+            35,
+            status="running",
+        )
+        record_evaluation_progress(session, evaluation, "优化方案校验通过", 92)
+
+        session.refresh(evaluation)
+        assert evaluation.insight_status == "running"
+        assert evaluation.insight_progress == 92
+        assert evaluation.insight_stage == "优化方案校验通过"
+        assert [event["sequence"] for event in evaluation.insight_events] == [1, 2]
+        assert evaluation.insight_events[0]["progress"] == 35
 
 
 def test_build_error_cases_keeps_context_for_analysis() -> None:

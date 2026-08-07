@@ -152,6 +152,10 @@ class Evaluation(Base):
     ground_truth_count: Mapped[int]
     insight_status: Mapped[str] = mapped_column(String(20), default="pending")
     insight_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    insight_progress: Mapped[int] = mapped_column(default=0)
+    insight_stage: Mapped[str] = mapped_column(String(200), default="等待分析")
+    insight_events: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    ground_truth_snapshot: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     analyses: Mapped[list["EvaluationAnalysis"]] = relationship(
         back_populates="evaluation", cascade="all, delete-orphan"

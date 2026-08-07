@@ -1,13 +1,25 @@
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
+from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.models import CategorySuggestion, DetectionItem, DetectionTask, Evaluation, TaskStatus
 from app.schemas.evaluations import (
     CategorySuggestionRead,
@@ -17,9 +29,10 @@ from app.schemas.evaluations import (
 )
 from app.services.evaluations import (
     calculate_metrics,
-    create_evaluation_insights,
     decide_suggestion,
     decide_suggestion_plan,
+    record_evaluation_progress,
+    run_evaluation_insights,
     validate_ground_truth_ids,
 )
 
@@ -45,9 +58,14 @@ def list_evaluations(task_id: str, session: DbSession) -> list[Evaluation]:
     )
 
 
-@router.post("/tasks/{task_id}", response_model=EvaluationRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tasks/{task_id}", response_model=EvaluationRead, status_code=status.HTTP_202_ACCEPTED
+)
 async def evaluate_task(
-    task_id: str, session: DbSession, file: Annotated[UploadFile, File()]
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    session: DbSession,
+    file: Annotated[UploadFile, File()],
 ) -> Evaluation:
     task = session.get(DetectionTask, task_id)
     if task is None:
@@ -79,13 +97,64 @@ async def evaluate_task(
         task_id=task_id,
         metrics=calculate_metrics(predictions, truths),
         ground_truth_count=len(truths),
+        insight_status="pending",
+        insight_progress=10,
+        insight_stage="人工标注校验完成，等待后台分析",
+        ground_truth_snapshot=[item.model_dump(mode="json") for item in truths],
     )
     session.add(evaluation)
-    session.commit()
+    session.flush()
+    record_evaluation_progress(
+        session,
+        evaluation,
+        "人工标注校验完成，已创建后台评测",
+        10,
+        status="pending",
+    )
     session.refresh(evaluation)
-    await create_evaluation_insights(session, evaluation, predictions, truths)
-    session.refresh(evaluation)
+    background_tasks.add_task(run_evaluation_insights, evaluation.id)
     return evaluation
+
+
+@router.get("/{evaluation_id}/events")
+async def stream_evaluation_events(
+    evaluation_id: str, request: Request, session: DbSession
+) -> StreamingResponse:
+    evaluation_or_404(session, evaluation_id)
+
+    async def event_stream() -> AsyncIterator[str]:
+        cursor = 0
+        while True:
+            if await request.is_disconnected():
+                return
+            with SessionLocal() as event_session:
+                current = event_session.get(Evaluation, evaluation_id)
+                if current is None:
+                    payload = {"status": "failed", "stage": "人工评测不存在", "progress": 100}
+                    yield f"event: failed\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    return
+                events = list(current.insight_events or [])
+                current_status = current.insight_status
+            for event in events[cursor:]:
+                cursor += 1
+                yield (
+                    f"id: {event.get('sequence', cursor)}\n"
+                    f"event: progress\n"
+                    f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                )
+            if current_status in {"completed", "fallback"} and cursor >= len(events):
+                yield (
+                    "event: complete\n"
+                    f"data: {json.dumps({'status': current_status}, ensure_ascii=False)}\n\n"
+                )
+                return
+            await asyncio.sleep(0.35)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post(

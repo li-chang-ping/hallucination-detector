@@ -253,8 +253,13 @@ async def test_analysis_retry_feeds_validation_error_back_to_model(monkeypatch) 
         },
     ]
     categories = [{"name": name} for name in ("政策偏差", "政策编造", "信息遗漏", "信息编造")]
+    progress_events: list[tuple[str, int]] = []
 
-    result = await client.analyze_evaluation(error_cases, categories)
+    result = await client.analyze_evaluation(
+        error_cases,
+        categories,
+        progress_callback=lambda stage, progress: progress_events.append((stage, progress)),
+    )
 
     assert [(item.action, item.target_category_name) for item in result.suggestions] == [
         ("archive", "政策编造"),
@@ -267,3 +272,5 @@ async def test_analysis_retry_feeds_validation_error_back_to_model(monkeypatch) 
     assert "重命名目标已存在" in correction
     assert '"existing_human_category_names": ["信息遗漏", "政策偏差"]' in correction
     assert '"obsolete_prediction_category_names": ["信息编造", "政策编造"]' in correction
+    assert any("第 1 次结果未通过" in stage for stage, _ in progress_events)
+    assert progress_events[-1] == ("优化方案校验通过，正在保存结果", 92)

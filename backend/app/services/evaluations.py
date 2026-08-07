@@ -3,6 +3,7 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db import SessionLocal
 from app.models import (
     Category,
     CategorySuggestion,
@@ -18,6 +19,58 @@ from app.schemas.evaluations import (
 )
 from app.services.categories import ensure_category_version, record_category_version
 from app.services.deepseek import DeepSeekClient, DeepSeekError
+
+
+def record_evaluation_progress(
+    session: Session,
+    evaluation: Evaluation,
+    stage: str,
+    progress: int,
+    *,
+    status: str | None = None,
+) -> None:
+    """持久化可向用户公开的业务阶段，供 SSE 断线重连后继续读取。"""
+    events = list(evaluation.insight_events or [])
+    events.append(
+        {
+            "sequence": len(events) + 1,
+            "stage": stage,
+            "progress": max(0, min(100, progress)),
+            "status": status or evaluation.insight_status,
+            "created_at": utc_now().isoformat(),
+        }
+    )
+    evaluation.insight_stage = stage[:200]
+    evaluation.insight_progress = max(0, min(100, progress))
+    evaluation.insight_events = events
+    if status:
+        evaluation.insight_status = status
+    session.commit()
+
+
+async def run_evaluation_insights(evaluation_id: str) -> None:
+    """使用独立会话执行响应返回后的评测分析。"""
+    with SessionLocal() as session:
+        evaluation = session.get(Evaluation, evaluation_id)
+        if evaluation is None:
+            return
+        predictions = list(
+            session.scalars(
+                select(DetectionItem).where(DetectionItem.task_id == evaluation.task_id)
+            )
+        )
+        truths = [GroundTruthItem.model_validate(item) for item in evaluation.ground_truth_snapshot]
+        try:
+            await create_evaluation_insights(session, evaluation, predictions, truths)
+        except Exception as exc:
+            evaluation.insight_error = f"后台评测失败: {exc}"[:2000]
+            record_evaluation_progress(
+                session,
+                evaluation,
+                "误判分析失败，请查看错误信息后重试",
+                100,
+                status="fallback",
+            )
 
 
 def _divide(numerator: int, denominator: int) -> float:
@@ -191,12 +244,30 @@ async def create_evaluation_insights(
     predictions: list[DetectionItem],
     truths: list[GroundTruthItem],
 ) -> None:
+    record_evaluation_progress(
+        session,
+        evaluation,
+        "指标计算完成，正在识别漏检和误报",
+        20,
+        status="running",
+    )
     error_cases = build_error_cases(predictions, truths, evaluation.metrics)
     if not error_cases:
-        evaluation.insight_status = "completed"
         evaluation.insight_error = None
-        session.commit()
+        record_evaluation_progress(
+            session,
+            evaluation,
+            "未发现漏检或误报，比较完成",
+            100,
+            status="completed",
+        )
         return
+    record_evaluation_progress(
+        session,
+        evaluation,
+        f"发现 {len(error_cases)} 条误判，正在准备分析上下文",
+        35,
+    )
     categories = list(session.scalars(select(Category).where(Category.is_archived.is_(False))))
     category_payload: list[dict[str, object]] = [
         {
@@ -208,12 +279,18 @@ async def create_evaluation_insights(
         for item in categories
     ]
     generated = EvaluationAnalysisResponse(analyses=[], suggestions=[])
+    analysis_succeeded = False
     try:
-        generated = await DeepSeekClient().analyze_evaluation(error_cases, category_payload)
-        evaluation.insight_status = "completed"
+        generated = await DeepSeekClient().analyze_evaluation(
+            error_cases,
+            category_payload,
+            progress_callback=lambda stage, progress: record_evaluation_progress(
+                session, evaluation, stage, progress
+            ),
+        )
+        analysis_succeeded = True
         evaluation.insight_error = None
     except DeepSeekError as exc:
-        evaluation.insight_status = "fallback"
         evaluation.insight_error = str(exc)[:2000]
     # 分析属于增强能力，失败时不能让已经完成的人工评测回滚。
     generated_map: dict[tuple[str, str], object] = {
@@ -259,6 +336,22 @@ async def create_evaluation_insights(
             )
         )
     session.commit()
+    if analysis_succeeded:
+        record_evaluation_progress(
+            session,
+            evaluation,
+            f"已保存 {len(error_cases)} 条误判分析和 {len(generated.suggestions)} 条优化建议",
+            100,
+            status="completed",
+        )
+    else:
+        record_evaluation_progress(
+            session,
+            evaluation,
+            "AI 优化建议生成失败，已保存规则化误判分析",
+            100,
+            status="fallback",
+        )
 
 
 def _apply_suggestion_change(session: Session, suggestion: CategorySuggestion) -> None:
