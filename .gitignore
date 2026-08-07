@@ -28,3 +28,7 @@ frontend/coverage/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local challenge prompt and source attachments
+/提示词.md
+/0110附件/
