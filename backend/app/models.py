@@ -118,3 +118,15 @@ class DetectionItem(Base):
     prompt_tokens: Mapped[int] = mapped_column(default=0)
     completion_tokens: Mapped[int] = mapped_column(default=0)
     task: Mapped[DetectionTask] = relationship(back_populates="items")
+
+
+class Evaluation(Base):
+    __tablename__ = "evaluations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    task_id: Mapped[str] = mapped_column(
+        ForeignKey("detection_tasks.id", ondelete="CASCADE"), index=True
+    )
+    metrics: Mapped[dict[str, object]] = mapped_column(JSON)
+    ground_truth_count: Mapped[int]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
