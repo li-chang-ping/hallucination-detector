@@ -68,7 +68,7 @@ class VectorStore:
             self.chroma.delete_collection(self.collection_name(knowledge_base_id))
         except Exception as exc:  # Chroma exposes transport-specific exception classes.
             if "does not exist" not in str(exc).lower():
-                raise
+                raise VectorStoreError(f"Chroma 删除知识库失败: {exc}") from exc
 
     def query(self, knowledge_base_id: str, text: str, limit: int = 5) -> list[dict[str, Any]]:
         collection = self.chroma.get_collection(self.collection_name(knowledge_base_id))

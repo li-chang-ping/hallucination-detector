@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import KnowledgeBase, KnowledgeEntry, utc_now
+from app.models import DetectionTask, KnowledgeBase, KnowledgeEntry, TaskStatus, utc_now
 from app.schemas.knowledge import KnowledgeEntryCreate, KnowledgeEntryUpdate, KnowledgeImport
 
 
@@ -19,6 +19,18 @@ class VectorStoreProtocol(Protocol):
 
     def delete_entry(self, knowledge_base_id: str, entry_id: str) -> None: ...
     def delete_knowledge_base(self, knowledge_base_id: str) -> None: ...
+
+
+class KnowledgeBaseInUseError(RuntimeError):
+    pass
+
+
+NON_TERMINAL_TASK_STATUSES = {
+    TaskStatus.PREPARING,
+    TaskStatus.QUEUED,
+    TaskStatus.RUNNING,
+    TaskStatus.PAUSED,
+}
 
 
 def import_knowledge_base(
@@ -111,6 +123,42 @@ def update_entry(
     session.commit()
     session.refresh(entry)
     return entry
+
+
+def delete_knowledge_base(
+    session: Session,
+    knowledge_base: KnowledgeBase,
+    vectors: VectorStoreProtocol,
+) -> None:
+    active_tasks = list(
+        session.scalars(
+            select(DetectionTask).where(
+                DetectionTask.knowledge_base_id == knowledge_base.id,
+                DetectionTask.status.in_(NON_TERMINAL_TASK_STATUSES),
+            )
+        )
+    )
+    if active_tasks:
+        names = "、".join(item.name for item in active_tasks[:3])
+        raise KnowledgeBaseInUseError(
+            f"该知识库正被 {len(active_tasks)} 个未结束任务使用（{names}），请先取消或完成任务"
+        )
+
+    # 已完成任务已经持有证据快照，解除引用后仍可查看历史检测结果。
+    historical_tasks = session.scalars(
+        select(DetectionTask).where(DetectionTask.knowledge_base_id == knowledge_base.id)
+    )
+    for task in historical_tasks:
+        task.knowledge_base_id = None
+    session.delete(knowledge_base)
+    try:
+        # 先验证 SQLite 约束，避免向量集合删除后数据库事务才失败。
+        session.flush()
+        vectors.delete_knowledge_base(knowledge_base.id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
 
 
 def entry_counts(session: Session) -> dict[str, int]:

@@ -16,7 +16,14 @@ from app.schemas.knowledge import (
     KnowledgeEntryUpdate,
     KnowledgeImport,
 )
-from app.services.knowledge import add_entry, entry_counts, import_knowledge_base, update_entry
+from app.services.knowledge import (
+    KnowledgeBaseInUseError,
+    add_entry,
+    delete_knowledge_base,
+    entry_counts,
+    import_knowledge_base,
+    update_entry,
+)
 from app.services.vector_store import VectorStore, VectorStoreError, get_vector_store
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
@@ -118,6 +125,9 @@ def remove_entry(
 @router.delete("/{knowledge_base_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_knowledge_base(knowledge_base_id: str, session: DbSession, vectors: Vectors) -> None:
     item = kb_or_404(session, knowledge_base_id)
-    vectors.delete_knowledge_base(knowledge_base_id)
-    session.delete(item)
-    session.commit()
+    try:
+        delete_knowledge_base(session, item, vectors)
+    except KnowledgeBaseInUseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except VectorStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

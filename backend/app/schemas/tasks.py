@@ -74,7 +74,7 @@ class DetectionTaskRead(BaseModel):
 
     id: str
     name: str
-    knowledge_base_id: str
+    knowledge_base_id: str | None
     status: TaskStatus
     model_name: str
     total_count: int

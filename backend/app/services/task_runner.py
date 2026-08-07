@@ -45,6 +45,8 @@ class TaskRunner:
                 )
             )
             kb_id = task.knowledge_base_id
+            if kb_id is None:
+                raise RuntimeError("检测任务引用的知识库已不存在")
         vectors = get_vector_store()
         for item in items:
             with SessionLocal() as session:

@@ -98,7 +98,9 @@ class DetectionTask(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(120), index=True)
-    knowledge_base_id: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.id"))
+    knowledge_base_id: Mapped[str | None] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="SET NULL"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(20), default=TaskStatus.QUEUED)
     model_name: Mapped[str] = mapped_column(String(120))
     total_count: Mapped[int] = mapped_column(default=0)
