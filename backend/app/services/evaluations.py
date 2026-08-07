@@ -32,11 +32,9 @@ def calculate_metrics(
     false_positive_ids: list[str] = []
     false_negative_ids: list[str] = []
     category_mismatch_ids: list[str] = []
-    primary_category_mismatch_ids: list[str] = []
     category_mismatches: list[dict[str, object]] = []
     positive_count = 0
-    primary_hits = 0
-    multilabel_hits = 0
+    category_match_count = 0
     category_totals: Counter[str] = Counter()
     category_hits: Counter[str] = Counter()
 
@@ -51,7 +49,7 @@ def calculate_metrics(
             else None
         )
         category_mismatch = bool(
-            predicted and actual and expected and expected not in prediction.category_names
+            predicted and actual and expected and expected != prediction.primary_category
         )
 
         # 保留标准二分类矩阵，同时按业务口径将分类未命中计入对外展示的误报。
@@ -72,8 +70,7 @@ def calculate_metrics(
                 {
                     "id": item_id,
                     "expected_category": expected,
-                    "predicted_primary_category": prediction.primary_category,
-                    "predicted_categories": prediction.category_names,
+                    "predicted_category": prediction.primary_category,
                 }
             )
         elif predicted and actual:
@@ -91,11 +88,7 @@ def calculate_metrics(
             positive_count += 1
             category_totals[expected] += 1
             if prediction.primary_category == expected:
-                primary_hits += 1
-            else:
-                primary_category_mismatch_ids.append(item_id)
-            if expected in prediction.category_names:
-                multilabel_hits += 1
+                category_match_count += 1
                 category_hits[expected] += 1
 
     return {
@@ -113,7 +106,6 @@ def calculate_metrics(
         "false_positive_ids": false_positive_ids,
         "false_negative_ids": false_negative_ids,
         "category_mismatch_ids": category_mismatch_ids,
-        "primary_category_mismatch_ids": primary_category_mismatch_ids,
         "category_mismatches": category_mismatches,
         "binary_confusion_matrix": {
             "tp": binary_tp,
@@ -123,8 +115,7 @@ def calculate_metrics(
         },
         "missing_prediction_ids": sorted(truth_map.keys() - prediction_map.keys()),
         "unmatched_prediction_ids": sorted(prediction_map.keys() - truth_map.keys()),
-        "primary_category_accuracy": _divide(primary_hits, positive_count),
-        "multilabel_category_hit_rate": _divide(multilabel_hits, positive_count),
+        "category_accuracy": _divide(category_match_count, positive_count),
         "category_stats": {
             name: {
                 "expected": count,

@@ -39,7 +39,7 @@ def test_calculate_binary_and_category_metrics() -> None:
     assert metrics["fn"] == 1
     assert metrics["precision"] == 0.5
     assert metrics["false_negative_ids"] == ["h02"]
-    assert metrics["primary_category_accuracy"] == 0.5
+    assert metrics["category_accuracy"] == 0.5
 
 
 def test_category_mismatch_is_counted_as_business_false_positive() -> None:
@@ -59,14 +59,13 @@ def test_category_mismatch_is_counted_as_business_false_positive() -> None:
         {
             "id": "h08",
             "expected_category": "政策与优惠错误",
-            "predicted_primary_category": "事实信息编造",
-            "predicted_categories": ["事实信息编造"],
+            "predicted_category": "事实信息编造",
         }
     ]
     assert metrics["binary_confusion_matrix"] == {"tp": 1, "tn": 0, "fp": 0, "fn": 0}
 
 
-def test_expected_multilabel_category_prevents_business_false_positive() -> None:
+def test_primary_category_mismatch_is_business_false_positive() -> None:
     predictions = [
         prediction(
             "h03",
@@ -81,7 +80,6 @@ def test_expected_multilabel_category_prevents_business_false_positive() -> None
 
     metrics = calculate_metrics(predictions, truths)
 
-    assert metrics["tp"] == 1
-    assert metrics["fp"] == 0
-    assert metrics["category_mismatch_ids"] == []
-    assert metrics["primary_category_mismatch_ids"] == ["h03"]
+    assert metrics["tp"] == 0
+    assert metrics["fp"] == 1
+    assert metrics["category_mismatch_ids"] == ["h03"]

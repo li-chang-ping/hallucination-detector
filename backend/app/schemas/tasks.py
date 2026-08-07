@@ -37,8 +37,8 @@ class DetectionDecision(BaseModel):
     @model_validator(mode="after")
     def consistent_result(self) -> "DetectionDecision":
         if self.is_hallucination:
-            if not self.category_names or self.primary_category not in self.category_names:
-                raise ValueError("幻觉结果必须包含分类，且主分类必须位于分类列表中")
+            if len(self.category_names) != 1 or self.primary_category != self.category_names[0]:
+                raise ValueError("幻觉结果必须且只能包含一个分类，并与主分类一致")
             if self.severity is None:
                 raise ValueError("幻觉结果必须包含严重度")
         else:

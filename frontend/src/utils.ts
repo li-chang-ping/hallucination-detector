@@ -23,7 +23,7 @@ export function formatCategoryMismatches(items: CategoryMismatch[]): string {
   return items
     .map(
       (item) =>
-        `${item.id}（人工：${item.expected_category}；模型：${item.predicted_categories.join('、') || '无分类'}）`,
+        `${item.id}（人工：${item.expected_category}；模型：${item.predicted_category || '无分类'}）`,
     )
     .join('；')
 }

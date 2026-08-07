@@ -72,8 +72,10 @@ class DeepSeekClient:
         return (
             "你是严格的智能客服幻觉审计器。只能以检索证据为事实来源，不得使用常识补全。"
             "需要识别直接矛盾、无证据的肯定事实、虚假的执行能力、安全误导和实质性遗漏。"
+            "当前采用单标签分类；存在多种问题时，只选择影响最严重、最能概括核心错误的一个分类。"
             "输出必须是 JSON 对象，字段为 is_hallucination、category_names、"
-            "primary_category、severity、confidence、rationale。不要输出思维过程。"
+            "primary_category、severity、confidence、rationale。"
+            "幻觉结果的 category_names 必须且只能包含 primary_category 一个值。不要输出思维过程。"
         )
 
     @staticmethod

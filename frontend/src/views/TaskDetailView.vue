@@ -110,9 +110,8 @@ onBeforeUnmount(() => timer && clearInterval(timer))
           ><small>综合指标</small>
         </div>
         <div class="metric-card">
-          <span>分类命中率</span
-          ><strong>{{ percent(latest.metrics.multilabel_category_hit_rate) }}</strong
-          ><small>多标签包含预期分类</small>
+          <span>分类命中率</span><strong>{{ percent(latest.metrics.category_accuracy) }}</strong
+          ><small>模型分类与人工分类一致</small>
         </div>
       </div>
       <el-alert
@@ -130,11 +129,6 @@ onBeforeUnmount(() => timer && clearInterval(timer))
         type="error"
         :closable="false"
         :title="`分类不一致：${formatCategoryMismatches(latest.metrics.category_mismatches)}`"
-        style="margin-top: 10px" /><el-alert
-        v-if="latest.metrics.primary_category_mismatch_ids?.length"
-        type="info"
-        :closable="false"
-        :title="`主分类不一致：${latest.metrics.primary_category_mismatch_ids.join('、')}（人工分类已包含在模型多标签中时不计误报）`"
         style="margin-top: 10px"
     /></el-card>
     <el-card class="panel" shadow="never"
@@ -191,7 +185,7 @@ onBeforeUnmount(() => timer && clearInterval(timer))
       ><el-descriptions :column="1" border
         ><el-descriptions-item label="输入 ID">{{ activeItem.input_id }}</el-descriptions-item
         ><el-descriptions-item label="分类">{{
-          activeItem.category_names.join('、') || '正常'
+          activeItem.primary_category || '正常'
         }}</el-descriptions-item
         ><el-descriptions-item label="严重度">{{ activeItem.severity || '—' }}</el-descriptions-item
         ><el-descriptions-item label="判断依据">{{

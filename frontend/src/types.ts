@@ -74,6 +74,5 @@ export interface Evaluation {
 export interface CategoryMismatch {
   id: string
   expected_category: string
-  predicted_primary_category: string | null
-  predicted_categories: string[]
+  predicted_category: string | null
 }
