@@ -1,1 +1,0 @@
-{"root":["./src/api.ts","./src/env.d.ts","./src/main.ts","./src/router.ts","./src/types.ts","./src/utils.ts","./src/app.vue","./src/views/categoriesview.vue","./src/views/knowledgeview.vue","./src/views/taskdetailview.vue","./src/views/tasksview.vue","./tests/app.test.ts","./tests/utils.test.ts"],"version":"5.7.2"}
