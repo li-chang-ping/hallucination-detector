@@ -21,6 +21,7 @@ screenshots/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
+.pnpm-store/
 
 # IDE / OS
 .idea/
