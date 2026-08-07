@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { Category, CategoryVersion, Severity } from '../types'
-import { formatTime } from '../utils'
+import { categorySnapshotStatus, formatTime } from '../utils'
 
 const categories = ref<Category[]>([])
 const visible = ref(false)
@@ -183,7 +183,7 @@ onMounted(load)
   <el-dialog
     v-model="historyVisible"
     :title="`${historyCategory?.name || ''} · 版本历史`"
-    width="760px"
+    width="92%"
   >
     <el-alert
       title="每次编辑、采纳优化建议和回退都会生成版本快照。"
@@ -192,14 +192,39 @@ onMounted(load)
       style="margin-bottom: 14px"
     />
     <el-table :data="versions" max-height="520">
-      <el-table-column label="时间" width="175">
+      <el-table-column label="时间" width="175" fixed>
         <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
       </el-table-column>
-      <el-table-column prop="note" label="变更来源" width="210" />
-      <el-table-column label="定义快照" min-width="250" show-overflow-tooltip>
+      <el-table-column prop="note" label="变更来源" width="200" />
+      <el-table-column label="分类名称" width="160">
+        <template #default="{ row }">{{ row.snapshot.name }}</template>
+      </el-table-column>
+      <el-table-column label="分类定义" min-width="260">
         <template #default="{ row }">{{ row.snapshot.description }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="90">
+      <el-table-column label="判定指引" min-width="300">
+        <template #default="{ row }">{{ row.snapshot.prompt_guidance || '—' }}</template>
+      </el-table-column>
+      <el-table-column label="严重度" width="90">
+        <template #default="{ row }">
+          {{
+            severityLabels[row.snapshot.default_severity as Severity] ||
+            row.snapshot.default_severity
+          }}
+        </template>
+      </el-table-column>
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag
+            :type="
+              row.snapshot.is_archived ? 'info' : row.snapshot.is_active ? 'success' : 'warning'
+            "
+          >
+            {{ categorySnapshotStatus(row.snapshot) }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="90" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" :loading="rollbackBusy === row.id" @click="rollback(row)"
             >回退</el-button

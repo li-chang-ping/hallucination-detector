@@ -38,3 +38,8 @@ const categoryFieldLabels: Record<string, string> = {
 export function categoryChangeEntries(changes: Record<string, unknown>): [string, unknown][] {
   return Object.entries(changes).map(([key, value]) => [categoryFieldLabels[key] || key, value])
 }
+
+export function categorySnapshotStatus(snapshot: Record<string, unknown>): string {
+  if (snapshot.is_archived) return '已归档'
+  return snapshot.is_active ? '已启用' : '已停用'
+}

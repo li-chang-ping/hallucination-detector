@@ -1,4 +1,10 @@
-import { categoryChangeEntries, formatCategoryMismatches, percent, statusText } from '../src/utils'
+import {
+  categoryChangeEntries,
+  categorySnapshotStatus,
+  formatCategoryMismatches,
+  percent,
+  statusText,
+} from '../src/utils'
 
 describe('display utilities', () => {
   it('formats evaluation ratios', () => expect(percent(0.9444)).toBe('94.4%'))
@@ -18,5 +24,9 @@ describe('display utilities', () => {
     expect(categoryChangeEntries({ prompt_guidance: '优先识别政策条件' })).toEqual([
       ['判定指引', '优先识别政策条件'],
     ])
+  })
+  it('formats category snapshot status', () => {
+    expect(categorySnapshotStatus({ is_active: true, is_archived: false })).toBe('已启用')
+    expect(categorySnapshotStatus({ is_active: false, is_archived: true })).toBe('已归档')
   })
 })
