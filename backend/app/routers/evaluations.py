@@ -19,11 +19,19 @@ from app.services.evaluations import (
     calculate_metrics,
     create_evaluation_insights,
     decide_suggestion,
+    decide_suggestion_plan,
     validate_ground_truth_ids,
 )
 
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 DbSession = Annotated[Session, Depends(get_db)]
+
+
+def evaluation_or_404(session: Session, evaluation_id: str) -> Evaluation:
+    evaluation = session.get(Evaluation, evaluation_id)
+    if evaluation is None:
+        raise HTTPException(status_code=404, detail="人工评测不存在")
+    return evaluation
 
 
 @router.get("/tasks/{task_id}", response_model=list[EvaluationRead])
@@ -111,5 +119,36 @@ def reject_suggestion(
         raise HTTPException(status_code=404, detail="优化建议不存在")
     try:
         return decide_suggestion(session, suggestion, apply=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{evaluation_id}/suggestions/apply-all",
+    response_model=list[CategorySuggestionRead],
+)
+def apply_suggestion_plan(evaluation_id: str, session: DbSession) -> list[CategorySuggestion]:
+    try:
+        return decide_suggestion_plan(
+            session, evaluation_or_404(session, evaluation_id), apply=True
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="优化方案存在分类名称冲突，已全部回滚") from exc
+
+
+@router.post(
+    "/{evaluation_id}/suggestions/reject-all",
+    response_model=list[CategorySuggestionRead],
+)
+def reject_suggestion_plan(evaluation_id: str, session: DbSession) -> list[CategorySuggestion]:
+    try:
+        return decide_suggestion_plan(
+            session, evaluation_or_404(session, evaluation_id), apply=False
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -261,60 +261,89 @@ async def create_evaluation_insights(
     session.commit()
 
 
+def _apply_suggestion_change(session: Session, suggestion: CategorySuggestion) -> None:
+    if suggestion.action == "create":
+        changes = suggestion.proposed_changes
+        category = Category(
+            name=suggestion.target_category_name,
+            description=cast(str, changes["description"]),
+            default_severity=cast(str, changes["default_severity"]),
+            prompt_guidance=cast(str, changes.get("prompt_guidance", "")),
+            is_active=True,
+        )
+        session.add(category)
+        session.flush()
+        suggestion.category_id = category.id
+        record_category_version(
+            session,
+            category,
+            source="evaluation_suggestion",
+            note=f"采纳评测新增建议 {suggestion.id}",
+        )
+        return
+
+    target_category = session.get(Category, suggestion.category_id)
+    if target_category is None or target_category.is_archived:
+        raise LookupError("目标幻觉分类不存在或已归档")
+    ensure_category_version(session, target_category, commit=False)
+    if suggestion.action == "archive":
+        target_category.is_archived = True
+        target_category.is_active = False
+        note = f"采纳评测归档建议 {suggestion.id}"
+    else:
+        for field, value in suggestion.proposed_changes.items():
+            if field in {"name", "description", "prompt_guidance", "default_severity"}:
+                setattr(target_category, field, value)
+        note = f"采纳评测修改建议 {suggestion.id}"
+    target_category.updated_at = utc_now()
+    record_category_version(
+        session,
+        target_category,
+        source="evaluation_suggestion",
+        note=note,
+    )
+
+
 def decide_suggestion(
     session: Session, suggestion: CategorySuggestion, *, apply: bool
 ) -> CategorySuggestion:
     if suggestion.status != "pending":
         raise ValueError("该优化建议已经处理")
-    if apply:
-        if suggestion.action == "create":
-            changes = suggestion.proposed_changes
-            category = Category(
-                name=suggestion.target_category_name,
-                description=cast(str, changes["description"]),
-                default_severity=cast(str, changes["default_severity"]),
-                prompt_guidance=cast(str, changes.get("prompt_guidance", "")),
-                is_active=True,
-            )
-            session.add(category)
-            session.flush()
-            suggestion.category_id = category.id
-            record_category_version(
-                session,
-                category,
-                source="evaluation_suggestion",
-                note=f"采纳评测新增建议 {suggestion.id}",
-            )
+    try:
+        if apply:
+            _apply_suggestion_change(session, suggestion)
+            suggestion.status = "applied"
         else:
-            target_category = session.get(Category, suggestion.category_id)
-            if target_category is None or target_category.is_archived:
-                raise LookupError("目标幻觉分类不存在或已归档")
-            ensure_category_version(session, target_category)
-            if suggestion.action == "archive":
-                target_category.is_archived = True
-                target_category.is_active = False
-                note = f"采纳评测归档建议 {suggestion.id}"
-            else:
-                for field, value in suggestion.proposed_changes.items():
-                    if field in {
-                        "name",
-                        "description",
-                        "prompt_guidance",
-                        "default_severity",
-                    }:
-                        setattr(target_category, field, value)
-                note = f"采纳评测修改建议 {suggestion.id}"
-            target_category.updated_at = utc_now()
-            record_category_version(
-                session,
-                target_category,
-                source="evaluation_suggestion",
-                note=note,
-            )
-        suggestion.status = "applied"
-    else:
-        suggestion.status = "rejected"
-    suggestion.decided_at = utc_now()
-    session.commit()
+            suggestion.status = "rejected"
+        suggestion.decided_at = utc_now()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     session.refresh(suggestion)
     return suggestion
+
+
+def decide_suggestion_plan(
+    session: Session, evaluation: Evaluation, *, apply: bool
+) -> list[CategorySuggestion]:
+    suggestions = list(evaluation.suggestions)
+    if not suggestions:
+        raise ValueError("当前评测没有优化建议")
+    if any(item.status != "pending" for item in suggestions):
+        raise ValueError("该优化方案已部分或全部处理，不能再整套操作")
+    try:
+        for suggestion in suggestions:
+            if apply:
+                _apply_suggestion_change(session, suggestion)
+                suggestion.status = "applied"
+            else:
+                suggestion.status = "rejected"
+            suggestion.decided_at = utc_now()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    for suggestion in suggestions:
+        session.refresh(suggestion)
+    return suggestions

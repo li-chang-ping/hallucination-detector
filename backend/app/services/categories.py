@@ -107,14 +107,17 @@ def update_category(
     return category
 
 
-def ensure_category_version(session: Session, category: Category) -> None:
+def ensure_category_version(session: Session, category: Category, *, commit: bool = True) -> None:
     """为升级前已有分类补一份当前状态，确保首次打开历史即可回退。"""
     exists = session.scalar(
         select(CategoryVersion.id).where(CategoryVersion.category_id == category.id).limit(1)
     )
     if exists is None:
         record_category_version(session, category, source="initial", note="迁移时记录当前定义")
-        session.commit()
+        if commit:
+            session.commit()
+        else:
+            session.flush()
 
 
 def rollback_category(session: Session, category: Category, version: CategoryVersion) -> Category:

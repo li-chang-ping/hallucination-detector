@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ArrowLeft, Refresh, Upload } from '@element-plus/icons-vue'
-import { ElMessage, type UploadRawFile } from 'element-plus'
+import { ElMessage, ElMessageBox, type UploadRawFile } from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
-import type { CategorySuggestion, DetectionItem, DetectionTask, Evaluation } from '../types'
+import type { DetectionItem, DetectionTask, Evaluation } from '../types'
 import {
   canEvaluateTask,
   categoryChangeEntries,
   formatCategoryMismatches,
+  isDialogCancelled,
   percent,
   statusText,
   taskProgress,
@@ -21,7 +22,7 @@ const route = useRoute(),
   drawer = ref(false),
   activeItem = ref<DetectionItem>(),
   evaluationFile = ref<UploadRawFile>()
-const suggestionBusy = ref<string>()
+const suggestionPlanBusy = ref(false)
 const evaluating = ref(false)
 const evaluationProgress = ref(0)
 const evaluationStage = ref('')
@@ -29,6 +30,11 @@ const evaluationProgressStatus = ref<'' | 'success' | 'exception'>('')
 const suggestionActionLabels = { create: '新增', update: '修改', archive: '归档' } as const
 let timer: number | undefined
 const latest = computed(() => evaluations.value[0]),
+  hasPendingSuggestionPlan = computed(
+    () =>
+      Boolean(latest.value?.suggestions?.length) &&
+      latest.value.suggestions.every((item) => item.status === 'pending'),
+  ),
   hallucinations = computed(() => task.value?.items?.filter((x) => x.is_hallucination).length || 0),
   tokens = computed(
     () =>
@@ -86,16 +92,23 @@ async function evaluate() {
     evaluating.value = false
   }
 }
-async function decideSuggestion(suggestion: CategorySuggestion, action: 'apply' | 'reject') {
-  suggestionBusy.value = suggestion.id
+async function decideSuggestionPlan(action: 'apply' | 'reject') {
   try {
-    await api.post(`/evaluations/${latest.value.id}/suggestions/${suggestion.id}/${action}`)
-    ElMessage.success(action === 'apply' ? '已采纳建议并更新幻觉定义' : '已忽略该建议')
+    await ElMessageBox.confirm(
+      action === 'apply'
+        ? '将以一个事务执行全部新增、修改和归档操作，任一步失败都会全部回滚。确认采纳整套方案？'
+        : '确认忽略本次评测的整套优化方案？',
+      action === 'apply' ? '采纳整套优化方案' : '忽略整套优化方案',
+      { type: action === 'apply' ? 'warning' : 'info' },
+    )
+    suggestionPlanBusy.value = true
+    await api.post(`/evaluations/${latest.value.id}/suggestions/${action}-all`)
+    ElMessage.success(action === 'apply' ? '整套方案已采纳并更新幻觉定义' : '整套方案已忽略')
     await load()
   } catch (e) {
-    ElMessage.error((e as Error).message)
+    if (!isDialogCancelled(e)) ElMessage.error((e as Error).message)
   } finally {
-    suggestionBusy.value = undefined
+    suggestionPlanBusy.value = false
   }
 }
 onMounted(() => {
@@ -219,7 +232,30 @@ onBeforeUnmount(() => timer && clearInterval(timer))
         </div>
       </template>
       <template v-if="latest.suggestions?.length">
-        <h3 class="evaluation-section-title">幻觉定义优化建议</h3>
+        <div class="suggestion-plan-heading">
+          <h3 class="evaluation-section-title">幻觉定义优化建议</h3>
+          <div v-if="hasPendingSuggestionPlan" class="suggestion-actions">
+            <el-button
+              type="primary"
+              size="small"
+              :loading="suggestionPlanBusy"
+              @click="decideSuggestionPlan('apply')"
+              >采纳整套方案</el-button
+            >
+            <el-button
+              size="small"
+              :disabled="suggestionPlanBusy"
+              @click="decideSuggestionPlan('reject')"
+              >全部忽略</el-button
+            >
+          </div>
+        </div>
+        <el-alert
+          type="info"
+          :closable="false"
+          title="以下建议是一套原子迁移方案，只能整套采纳或全部忽略。"
+          style="margin-bottom: 12px"
+        />
         <div class="analysis-list">
           <div v-for="suggestion in latest.suggestions" :key="suggestion.id" class="analysis-card">
             <div class="analysis-title">
@@ -236,18 +272,6 @@ onBeforeUnmount(() => timer && clearInterval(timer))
               class="change-row"
             >
               <strong>{{ label }}：</strong>{{ value }}
-            </div>
-            <div v-if="suggestion.status === 'pending'" class="suggestion-actions">
-              <el-button
-                type="primary"
-                size="small"
-                :loading="suggestionBusy === suggestion.id"
-                @click="decideSuggestion(suggestion, 'apply')"
-                >采纳并{{ suggestionActionLabels[suggestion.action] }}定义</el-button
-              >
-              <el-button size="small" @click="decideSuggestion(suggestion, 'reject')"
-                >忽略</el-button
-              >
             </div>
           </div>
         </div>
@@ -382,7 +406,14 @@ onBeforeUnmount(() => timer && clearInterval(timer))
   white-space: pre-wrap;
 }
 .suggestion-actions {
-  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+.suggestion-plan-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 .evaluation-progress {
   margin-bottom: 16px;

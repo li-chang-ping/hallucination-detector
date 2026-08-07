@@ -91,3 +91,60 @@ def test_suggestion_validation_rejects_create_and_rename_conflict() -> None:
             {"事实信息编造"},
             {"信息编造"},
         )
+
+
+def test_suggestion_validation_requires_obsolete_source_cleanup() -> None:
+    create_only = EvaluationAnalysisResponse(
+        analyses=[],
+        suggestions=[
+            suggestion(
+                "create",
+                "政策编造",
+                proposed_description="编造政策规则",
+                proposed_default_severity="high",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="必须归档或重命名"):
+        DeepSeekClient._validate_suggestions(
+            create_only,
+            {"政策与优惠错误"},
+            {"政策编造"},
+            mismatch_sources={"政策与优惠错误"},
+            human_names={"政策编造"},
+        )
+
+    coherent_plan = EvaluationAnalysisResponse(
+        analyses=[],
+        suggestions=[
+            suggestion(
+                "create",
+                "政策编造",
+                proposed_description="编造政策规则",
+                proposed_default_severity="high",
+            ),
+            suggestion("archive", "政策与优惠错误"),
+        ],
+    )
+    DeepSeekClient._validate_suggestions(
+        coherent_plan,
+        {"政策与优惠错误"},
+        {"政策编造"},
+        mismatch_sources={"政策与优惠错误"},
+        human_names={"政策编造"},
+    )
+
+
+def test_suggestion_validation_rejects_rename_to_existing_category() -> None:
+    result = EvaluationAnalysisResponse(
+        analyses=[],
+        suggestions=[suggestion("update", "政策编造", proposed_name="政策与优惠错误")],
+    )
+
+    with pytest.raises(ValueError, match="重命名目标已存在"):
+        DeepSeekClient._validate_suggestions(
+            result,
+            {"政策编造", "政策与优惠错误"},
+            set(),
+        )

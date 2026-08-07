@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import Base
@@ -22,6 +23,7 @@ from app.services.evaluations import (
     calculate_metrics,
     create_evaluation_insights,
     decide_suggestion,
+    decide_suggestion_plan,
     validate_ground_truth_ids,
 )
 
@@ -302,3 +304,84 @@ def test_apply_create_and_archive_suggestions() -> None:
         decide_suggestion(session, archive_suggestion, apply=True)
         assert created.is_archived is True
         assert created.is_active is False
+
+
+def test_apply_suggestion_plan_is_atomic() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        broad = Category(
+            name="政策与优惠错误",
+            description="宽泛分类",
+            default_severity=Severity.HIGH,
+        )
+        evaluation = Evaluation(task_id="task", metrics={}, ground_truth_count=1)
+        session.add_all([broad, evaluation])
+        session.flush()
+        archive = CategorySuggestion(
+            evaluation_id=evaluation.id,
+            category_id=broad.id,
+            action="archive",
+            target_category_name=broad.name,
+            reason="由细分类替代",
+            proposed_changes={},
+        )
+        conflicting_create = CategorySuggestion(
+            evaluation_id=evaluation.id,
+            action="create",
+            target_category_name=broad.name,
+            reason="故意制造名称冲突",
+            proposed_changes={"description": "重复名称", "default_severity": "high"},
+        )
+        session.add_all([archive, conflicting_create])
+        session.commit()
+
+        with pytest.raises(IntegrityError):
+            decide_suggestion_plan(session, evaluation, apply=True)
+
+        assert session.get(Category, broad.id).is_archived is False
+        assert session.get(CategorySuggestion, archive.id).status == "pending"
+        assert session.get(CategorySuggestion, conflicting_create.id).status == "pending"
+
+
+def test_apply_complete_suggestion_plan() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        broad = Category(
+            name="政策与优惠错误",
+            description="宽泛分类",
+            default_severity=Severity.HIGH,
+        )
+        evaluation = Evaluation(task_id="task", metrics={}, ground_truth_count=1)
+        session.add_all([broad, evaluation])
+        session.flush()
+        session.add_all(
+            [
+                CategorySuggestion(
+                    evaluation_id=evaluation.id,
+                    action="create",
+                    target_category_name="政策编造",
+                    reason="新增人工细分类",
+                    proposed_changes={
+                        "description": "编造政策规则",
+                        "default_severity": "high",
+                    },
+                ),
+                CategorySuggestion(
+                    evaluation_id=evaluation.id,
+                    category_id=broad.id,
+                    action="archive",
+                    target_category_name=broad.name,
+                    reason="细分类已覆盖",
+                    proposed_changes={},
+                ),
+            ]
+        )
+        session.commit()
+
+        suggestions = decide_suggestion_plan(session, evaluation, apply=True)
+
+        assert {item.status for item in suggestions} == {"applied"}
+        assert session.get(Category, broad.id).is_archived is True
+        assert session.scalar(select(Category).where(Category.name == "政策编造")) is not None

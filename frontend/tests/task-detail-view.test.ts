@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessageBox } from 'element-plus'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { beforeEach, vi } from 'vitest'
 import TaskDetailView from '../src/views/TaskDetailView.vue'
@@ -126,6 +126,51 @@ describe('TaskDetailView', () => {
       .find((button) => button.text().includes('开始比对'))
     expect(completedButton).toBeDefined()
     expect(completedButton!.classes()).not.toContain('is-loading')
+    wrapper.unmount()
+  })
+
+  it('applies the complete suggestion plan through one endpoint', async () => {
+    evaluationData = [
+      {
+        id: 'evaluation-plan',
+        task_id: 'task-1',
+        metrics: { recall: 1, accuracy: 0.5, evaluated_count: 2, tp: 1, tn: 0, fn: 0, fp: 1 },
+        ground_truth_count: 2,
+        insight_status: 'completed',
+        insight_error: null,
+        created_at: '2026-08-08T00:00:00Z',
+        analyses: [],
+        suggestions: [
+          {
+            id: 'suggestion-1',
+            category_id: 'category-1',
+            action: 'archive',
+            target_category_name: '政策与优惠错误',
+            reason: '由细分类替代',
+            proposed_changes: {},
+            status: 'pending',
+            created_at: '2026-08-08T00:00:00Z',
+            decided_at: null,
+          },
+        ],
+      },
+    ]
+    apiMocks.post.mockResolvedValue({ data: [] })
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm' as never)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/tasks/:id', component: TaskDetailView }],
+    })
+    await router.push('/tasks/task-1')
+    await router.isReady()
+    const wrapper = mount(TaskDetailView, { global: { plugins: [ElementPlus, router] } })
+    await flushPromises()
+
+    await wrapper.get('button.el-button--primary').trigger('click')
+    await flushPromises()
+
+    expect(apiMocks.post).toHaveBeenCalledWith('/evaluations/evaluation-plan/suggestions/apply-all')
+    expect(wrapper.text()).toContain('只能整套采纳或全部忽略')
     wrapper.unmount()
   })
 })

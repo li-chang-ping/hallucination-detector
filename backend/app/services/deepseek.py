@@ -106,6 +106,10 @@ class DeepSeekClient:
                 "现有宽泛分类对应多个人工分类时，必须 create 每个缺失的人工同名分类",
                 "不得仅修改描述或指引来处理名称不一致，因为这不会改善严格比较结果",
                 "同一个目标名称只能选择 create 或重命名其中一种，不得生成冲突建议",
+                "把全部 suggestions 作为一套原子执行的分类迁移方案，不得包含互相冲突的操作",
+                "一对一名称替换应 update 旧分类名称，不要 create 语义相同的新分类",
+                "一个宽泛旧分类拆为多个人工细分类时，必须 create 缺失细分类并 archive 旧分类",
+                "不得把分类重命名为任何已有分类名称，也不得让多个分类重命名为同一名称",
                 "存在误判时至少给出一条可执行的分类优化建议",
                 "不要输出思维过程",
             ],
@@ -156,7 +160,25 @@ class DeepSeekClient:
                         if item.get("human_category")
                         and str(item["human_category"]) not in allowed_names
                     }
-                    self._validate_suggestions(result, allowed_names, missing_names)
+                    human_names = {
+                        str(item["human_category"])
+                        for item in error_cases
+                        if item.get("human_category")
+                    }
+                    mismatch_sources = {
+                        str(item["predicted_category"])
+                        for item in error_cases
+                        if item.get("predicted_category")
+                        and item.get("human_category")
+                        and item["predicted_category"] != item["human_category"]
+                    }
+                    self._validate_suggestions(
+                        result,
+                        allowed_names,
+                        missing_names,
+                        mismatch_sources=mismatch_sources,
+                        human_names=human_names,
+                    )
                     return result
             except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
                 last_error = exc
@@ -169,6 +191,9 @@ class DeepSeekClient:
         result: EvaluationAnalysisResponse,
         allowed_names: set[str],
         missing_names: set[str],
+        *,
+        mismatch_sources: set[str] | None = None,
+        human_names: set[str] | None = None,
     ) -> None:
         if not result.suggestions:
             raise ValueError("存在误判但未返回优化建议")
@@ -185,6 +210,12 @@ class DeepSeekClient:
         duplicates = create_names & allowed_names
         if duplicates:
             raise ValueError(f"新增建议使用了已有分类: {', '.join(sorted(duplicates))}")
+        suggestion_targets = [item.target_category_name for item in result.suggestions]
+        repeated_targets = {
+            name for name in suggestion_targets if suggestion_targets.count(name) > 1
+        }
+        if repeated_targets:
+            raise ValueError(f"同一分类存在多条冲突建议: {', '.join(sorted(repeated_targets))}")
         renamed_names = {
             item.proposed_name
             for item in result.suggestions
@@ -193,9 +224,40 @@ class DeepSeekClient:
         conflicts = create_names & renamed_names
         if conflicts:
             raise ValueError(f"新增与重命名建议冲突: {', '.join(sorted(conflicts))}")
+        existing_rename_targets = renamed_names & allowed_names
+        if existing_rename_targets:
+            raise ValueError(f"重命名目标已存在: {', '.join(sorted(existing_rename_targets))}")
+        rename_list = [
+            item.proposed_name
+            for item in result.suggestions
+            if item.action == "update" and item.proposed_name
+        ]
+        duplicate_renames = {name for name in rename_list if rename_list.count(name) > 1}
+        if duplicate_renames:
+            raise ValueError(f"多个分类重命名为同一名称: {', '.join(sorted(duplicate_renames))}")
+        archive_names = {
+            item.target_category_name for item in result.suggestions if item.action == "archive"
+        }
+        archive_rename_conflicts = archive_names & renamed_names
+        if archive_rename_conflicts:
+            raise ValueError(
+                "归档分类不能同时作为重命名目标: " + ", ".join(sorted(archive_rename_conflicts))
+            )
         unresolved = missing_names - create_names - renamed_names
         if unresolved:
             raise ValueError(f"缺少分类名称对齐建议: {', '.join(sorted(unresolved))}")
+        obsolete_sources = (mismatch_sources or set()) - (human_names or set())
+        renamed_sources = {
+            item.target_category_name
+            for item in result.suggestions
+            if item.action == "update" and item.proposed_name
+        }
+        unresolved_sources = obsolete_sources - archive_names - renamed_sources
+        if unresolved_sources:
+            raise ValueError(
+                "新增细分类前必须归档或重命名持续误报的旧分类: "
+                + ", ".join(sorted(unresolved_sources))
+            )
 
     @staticmethod
     def _system_prompt() -> str:
