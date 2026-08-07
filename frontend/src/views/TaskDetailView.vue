@@ -99,11 +99,11 @@ onBeforeUnmount(() => timer && clearInterval(timer))
         <div class="metric-card">
           <span>Recall 检出率</span
           ><strong class="success-value">{{ percent(latest.metrics.recall) }}</strong
-          ><small>漏检 {{ latest.metrics.fn }} 条</small>
+          ><small>漏检 {{ latest.metrics.fn }} 条 · 人工为幻觉，模型判正常</small>
         </div>
         <div class="metric-card">
           <span>Precision 准确率</span><strong>{{ percent(latest.metrics.precision) }}</strong
-          ><small>误报 {{ latest.metrics.fp }} 条</small>
+          ><small>误报 {{ latest.metrics.fp }} 条 · 人工判正常或分类不一致</small>
         </div>
       </div>
       <el-alert
