@@ -42,6 +42,25 @@ class Category(Base):
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    versions: Mapped[list["CategoryVersion"]] = relationship(
+        back_populates="category",
+        cascade="all, delete-orphan",
+        order_by="CategoryVersion.created_at",
+    )
+
+
+class CategoryVersion(Base):
+    __tablename__ = "category_versions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    category_id: Mapped[str] = mapped_column(
+        ForeignKey("categories.id", ondelete="CASCADE"), index=True
+    )
+    snapshot: Mapped[dict[str, object]] = mapped_column(JSON)
+    source: Mapped[str] = mapped_column(String(40), default="manual")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    category: Mapped[Category] = relationship(back_populates="versions")
 
 
 class KnowledgeBase(Base):
@@ -130,3 +149,44 @@ class Evaluation(Base):
     metrics: Mapped[dict[str, object]] = mapped_column(JSON)
     ground_truth_count: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    analyses: Mapped[list["EvaluationAnalysis"]] = relationship(
+        back_populates="evaluation", cascade="all, delete-orphan"
+    )
+    suggestions: Mapped[list["CategorySuggestion"]] = relationship(
+        back_populates="evaluation", cascade="all, delete-orphan"
+    )
+
+
+class EvaluationAnalysis(Base):
+    __tablename__ = "evaluation_analyses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("evaluations.id", ondelete="CASCADE"), index=True
+    )
+    input_id: Mapped[str] = mapped_column(String(120), index=True)
+    error_type: Mapped[str] = mapped_column(String(20))
+    human_category: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    predicted_category: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reason: Mapped[str] = mapped_column(Text)
+    likely_cause: Mapped[str] = mapped_column(Text)
+    evidence_summary: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    evaluation: Mapped[Evaluation] = relationship(back_populates="analyses")
+
+
+class CategorySuggestion(Base):
+    __tablename__ = "category_suggestions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    evaluation_id: Mapped[str] = mapped_column(
+        ForeignKey("evaluations.id", ondelete="CASCADE"), index=True
+    )
+    category_id: Mapped[str] = mapped_column(ForeignKey("categories.id"), index=True)
+    target_category_name: Mapped[str] = mapped_column(String(80))
+    reason: Mapped[str] = mapped_column(Text)
+    proposed_changes: Mapped[dict[str, object]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evaluation: Mapped[Evaluation] = relationship(back_populates="suggestions")

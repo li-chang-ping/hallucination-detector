@@ -29,3 +29,13 @@ class CategoryRead(CategoryCreate):
     created_at: datetime
     updated_at: datetime
 
+
+class CategoryVersionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    category_id: str
+    snapshot: dict[str, object]
+    source: str
+    note: str
+    created_at: datetime

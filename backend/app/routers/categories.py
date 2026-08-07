@@ -6,9 +6,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Category, utc_now
-from app.schemas.categories import CategoryCreate, CategoryRead, CategoryUpdate
-from app.services.categories import create_category, update_category
+from app.models import Category, CategoryVersion, utc_now
+from app.schemas.categories import CategoryCreate, CategoryRead, CategoryUpdate, CategoryVersionRead
+from app.services.categories import (
+    create_category,
+    ensure_category_version,
+    record_category_version,
+    rollback_category,
+    update_category,
+)
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -55,7 +61,35 @@ def edit_category(category_id: str, data: CategoryUpdate, session: DbSession) ->
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 def archive_category(category_id: str, session: DbSession) -> None:
     category = get_category_or_404(session, category_id)
+    ensure_category_version(session, category)
     category.is_archived = True
     category.is_active = False
     category.updated_at = utc_now()
+    record_category_version(session, category, source="manual", note="归档分类")
     session.commit()
+
+
+@router.get("/{category_id}/versions", response_model=list[CategoryVersionRead])
+def list_category_versions(category_id: str, session: DbSession) -> list[CategoryVersion]:
+    category = get_category_or_404(session, category_id)
+    ensure_category_version(session, category)
+    return list(
+        session.scalars(
+            select(CategoryVersion)
+            .where(CategoryVersion.category_id == category_id)
+            .order_by(CategoryVersion.created_at.desc())
+        )
+    )
+
+
+@router.post("/{category_id}/rollback/{version_id}", response_model=CategoryRead)
+def restore_category(category_id: str, version_id: str, session: DbSession) -> Category:
+    category = get_category_or_404(session, category_id)
+    version = session.get(CategoryVersion, version_id)
+    if version is None or version.category_id != category_id:
+        raise HTTPException(status_code=404, detail="分类历史版本不存在")
+    try:
+        return rollback_category(session, category, version)
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="历史版本中的分类名称已被占用") from exc

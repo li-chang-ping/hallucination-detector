@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Category, Severity, utc_now
+from app.models import Category, CategoryVersion, Severity, utc_now
 from app.schemas.categories import CategoryCreate, CategoryUpdate
 
 DEFAULT_CATEGORIES = (
@@ -47,23 +47,95 @@ DEFAULT_CATEGORIES = (
 def seed_default_categories(session: Session) -> None:
     if session.scalar(select(Category.id).limit(1)) is not None:
         return
-    session.add_all([Category(**item.model_dump(mode="json")) for item in DEFAULT_CATEGORIES])
+    for item in DEFAULT_CATEGORIES:
+        category = Category(**item.model_dump(mode="json"))
+        session.add(category)
+        session.flush()
+        record_category_version(session, category, source="initial", note="初始化默认分类")
     session.commit()
+
+
+def category_snapshot(category: Category) -> dict[str, object]:
+    return {
+        "name": category.name,
+        "description": category.description,
+        "default_severity": category.default_severity,
+        "prompt_guidance": category.prompt_guidance,
+        "is_active": category.is_active,
+        "is_archived": category.is_archived,
+    }
+
+
+def record_category_version(
+    session: Session, category: Category, *, source: str, note: str
+) -> CategoryVersion:
+    version = CategoryVersion(
+        category_id=category.id,
+        snapshot=category_snapshot(category),
+        source=source,
+        note=note,
+    )
+    session.add(version)
+    return version
 
 
 def create_category(session: Session, data: CategoryCreate) -> Category:
     category = Category(**data.model_dump(mode="json"))
     session.add(category)
+    session.flush()
+    record_category_version(session, category, source="manual", note="创建分类")
     session.commit()
     session.refresh(category)
     return category
 
 
-def update_category(session: Session, category: Category, data: CategoryUpdate) -> Category:
+def update_category(
+    session: Session,
+    category: Category,
+    data: CategoryUpdate,
+    *,
+    source: str = "manual",
+    note: str = "编辑分类",
+) -> Category:
+    ensure_category_version(session, category)
     for field, value in data.model_dump(exclude_unset=True, mode="json").items():
         setattr(category, field, value)
     category.updated_at = utc_now()
+    record_category_version(session, category, source=source, note=note)
     session.commit()
     session.refresh(category)
     return category
 
+
+def ensure_category_version(session: Session, category: Category) -> None:
+    """为升级前已有分类补一份当前状态，确保首次打开历史即可回退。"""
+    exists = session.scalar(
+        select(CategoryVersion.id).where(CategoryVersion.category_id == category.id).limit(1)
+    )
+    if exists is None:
+        record_category_version(session, category, source="initial", note="迁移时记录当前定义")
+        session.commit()
+
+
+def rollback_category(session: Session, category: Category, version: CategoryVersion) -> Category:
+    snapshot = version.snapshot
+    for field in (
+        "name",
+        "description",
+        "default_severity",
+        "prompt_guidance",
+        "is_active",
+        "is_archived",
+    ):
+        if field in snapshot:
+            setattr(category, field, snapshot[field])
+    category.updated_at = utc_now()
+    record_category_version(
+        session,
+        category,
+        source="rollback",
+        note=f"回退到版本 {version.id}",
+    )
+    session.commit()
+    session.refresh(category)
+    return category

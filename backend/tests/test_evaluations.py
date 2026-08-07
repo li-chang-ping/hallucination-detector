@@ -1,8 +1,19 @@
 from datetime import UTC, datetime
 
-from app.models import DetectionItem
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from app.db import Base
+from app.models import (
+    Category,
+    CategorySuggestion,
+    CategoryVersion,
+    DetectionItem,
+    Evaluation,
+    Severity,
+)
 from app.schemas.evaluations import EvaluationRead, GroundTruthItem
-from app.services.evaluations import calculate_metrics
+from app.services.evaluations import build_error_cases, calculate_metrics, decide_suggestion
 
 
 def prediction(
@@ -48,9 +59,7 @@ def test_calculate_binary_and_category_metrics() -> None:
 
 def test_category_mismatch_is_counted_as_business_false_positive() -> None:
     predictions = [prediction("h08", True, "事实信息编造")]
-    truths = [
-        GroundTruthItem(id="h08", is_hallucination=True, hallucination_type="政策偏差")
-    ]
+    truths = [GroundTruthItem(id="h08", is_hallucination=True, hallucination_type="政策偏差")]
 
     metrics = calculate_metrics(predictions, truths)
 
@@ -78,9 +87,7 @@ def test_primary_category_mismatch_is_business_false_positive() -> None:
             categories=["事实信息编造", "能力越界"],
         )
     ]
-    truths = [
-        GroundTruthItem(id="h03", is_hallucination=True, hallucination_type="能力越界")
-    ]
+    truths = [GroundTruthItem(id="h03", is_hallucination=True, hallucination_type="能力越界")]
 
     metrics = calculate_metrics(predictions, truths)
 
@@ -106,3 +113,60 @@ def test_evaluation_response_removes_unsupported_historical_metrics() -> None:
     )
 
     assert result.metrics == {"recall": 1.0}
+
+
+def test_build_error_cases_keeps_context_for_analysis() -> None:
+    item = prediction("h08", True, "事实信息编造")
+    item.rationale = "回复给出了错误地址"
+    truths = [
+        GroundTruthItem(
+            id="h08",
+            is_hallucination=True,
+            hallucination_type="政策偏差",
+            detail="应归入政策错误",
+        )
+    ]
+    metrics = calculate_metrics([item], truths)
+
+    cases = build_error_cases([item], truths, metrics)
+
+    assert cases[0]["error_type"] == "false_positive"
+    assert cases[0]["human_category"] == "政策与优惠错误"
+    assert cases[0]["predicted_category"] == "事实信息编造"
+
+
+def test_apply_suggestion_updates_category_and_creates_version() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        category = Category(
+            name="政策与优惠错误",
+            description="旧定义",
+            default_severity=Severity.HIGH,
+            prompt_guidance="旧指引",
+        )
+        evaluation = Evaluation(task_id="task", metrics={}, ground_truth_count=1)
+        session.add_all([category, evaluation])
+        session.flush()
+        suggestion = CategorySuggestion(
+            evaluation_id=evaluation.id,
+            category_id=category.id,
+            target_category_name=category.name,
+            reason="分类边界需要明确",
+            proposed_changes={"prompt_guidance": "新指引"},
+        )
+        session.add(suggestion)
+        session.commit()
+
+        decided = decide_suggestion(session, suggestion, apply=True)
+
+        assert decided.status == "applied"
+        assert category.prompt_guidance == "新指引"
+        versions = list(
+            session.scalars(
+                select(CategoryVersion).where(CategoryVersion.category_id == category.id)
+            )
+        )
+        assert len(versions) == 2
+        assert versions[0].snapshot["prompt_guidance"] == "旧指引"
+        assert versions[1].snapshot["prompt_guidance"] == "新指引"

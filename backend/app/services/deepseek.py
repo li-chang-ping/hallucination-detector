@@ -6,6 +6,7 @@ import httpx
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings
+from app.schemas.evaluations import EvaluationAnalysisResponse
 from app.schemas.tasks import DetectionDecision
 
 
@@ -67,6 +68,71 @@ class DeepSeekClient:
                     await asyncio.sleep(2**attempt)
         raise DeepSeekError(f"DeepSeek 连续三次调用失败: {last_error}") from last_error
 
+    async def analyze_evaluation(
+        self,
+        error_cases: list[dict[str, object]],
+        categories: list[dict[str, object]],
+    ) -> EvaluationAnalysisResponse:
+        """分析已由确定性指标识别出的误判，不允许模型改写误判清单。"""
+        if not self.settings.deepseek_api_key:
+            raise DeepSeekError("未配置 DEEPSEEK_API_KEY")
+        payload_data = {
+            "error_cases": error_cases,
+            "current_categories": categories,
+            "output_json_schema": EvaluationAnalysisResponse.model_json_schema(),
+            "requirements": [
+                "逐条解释误判形成原因，analysis 的 input_id 和 error_type 必须与输入一致",
+                "只在分类边界或判定指引确实可改进时给出建议，避免为单个样本过拟合",
+                "建议只能修改现有分类的 description、prompt_guidance、default_severity",
+                "存在误判时至少给出一条可执行的分类优化建议",
+                "不要建议新增分类，不要输出思维过程",
+            ],
+        }
+        last_error: Exception | None = None
+        allowed_names = {str(item["name"]) for item in categories}
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    response = await client.post(
+                        f"{self.settings.deepseek_base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {self.settings.deepseek_api_key}"},
+                        json={
+                            "model": self.settings.deepseek_model,
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "你是客服幻觉评测专家。输出 JSON 对象，字段仅为 "
+                                        "analyses 和 suggestions。建议必须改善分类边界，"
+                                        "且保持通用性。"
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": json.dumps(payload_data, ensure_ascii=False),
+                                },
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.1,
+                            "max_tokens": 2500,
+                            "thinking": {"type": "disabled"},
+                        },
+                    )
+                    response.raise_for_status()
+                    content = response.json()["choices"][0]["message"]["content"]
+                    result = EvaluationAnalysisResponse.model_validate_json(content)
+                    unknown = {
+                        item.target_category_name for item in result.suggestions
+                    } - allowed_names
+                    if unknown:
+                        raise ValueError(f"优化建议包含未知分类: {', '.join(sorted(unknown))}")
+                    return result
+            except (httpx.HTTPError, KeyError, TypeError, ValueError, ValidationError) as exc:
+                last_error = exc
+                if attempt < 2:
+                    await asyncio.sleep(2**attempt)
+        raise DeepSeekError(f"DeepSeek 误判分析连续三次调用失败: {last_error}") from last_error
+
     @staticmethod
     def _system_prompt() -> str:
         return (
@@ -101,4 +167,3 @@ class DeepSeekClient:
             },
         }
         return "请审计以下客服回复，并输出 JSON：\n" + json.dumps(data, ensure_ascii=False)
-

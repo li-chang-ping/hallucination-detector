@@ -7,9 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import DetectionItem, DetectionTask, Evaluation
-from app.schemas.evaluations import EvaluationRead, GroundTruthItem
-from app.services.evaluations import calculate_metrics
+from app.models import CategorySuggestion, DetectionItem, DetectionTask, Evaluation
+from app.schemas.evaluations import CategorySuggestionRead, EvaluationRead, GroundTruthItem
+from app.services.evaluations import (
+    calculate_metrics,
+    create_evaluation_insights,
+    decide_suggestion,
+)
 
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -26,9 +30,7 @@ def list_evaluations(task_id: str, session: DbSession) -> list[Evaluation]:
     )
 
 
-@router.post(
-    "/tasks/{task_id}", response_model=EvaluationRead, status_code=status.HTTP_201_CREATED
-)
+@router.post("/tasks/{task_id}", response_model=EvaluationRead, status_code=status.HTTP_201_CREATED)
 async def evaluate_task(
     task_id: str, session: DbSession, file: Annotated[UploadFile, File()]
 ) -> Evaluation:
@@ -52,5 +54,38 @@ async def evaluate_task(
     session.add(evaluation)
     session.commit()
     session.refresh(evaluation)
+    await create_evaluation_insights(session, evaluation, predictions, truths)
+    session.refresh(evaluation)
     return evaluation
 
+
+@router.post(
+    "/{evaluation_id}/suggestions/{suggestion_id}/apply", response_model=CategorySuggestionRead
+)
+def apply_suggestion(
+    evaluation_id: str, suggestion_id: str, session: DbSession
+) -> CategorySuggestion:
+    suggestion = session.get(CategorySuggestion, suggestion_id)
+    if suggestion is None or suggestion.evaluation_id != evaluation_id:
+        raise HTTPException(status_code=404, detail="优化建议不存在")
+    try:
+        return decide_suggestion(session, suggestion, apply=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/{evaluation_id}/suggestions/{suggestion_id}/reject", response_model=CategorySuggestionRead
+)
+def reject_suggestion(
+    evaluation_id: str, suggestion_id: str, session: DbSession
+) -> CategorySuggestion:
+    suggestion = session.get(CategorySuggestion, suggestion_id)
+    if suggestion is None or suggestion.evaluation_id != evaluation_id:
+        raise HTTPException(status_code=404, detail="优化建议不存在")
+    try:
+        return decide_suggestion(session, suggestion, apply=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

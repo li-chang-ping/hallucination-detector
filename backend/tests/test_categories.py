@@ -2,9 +2,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.models import Category, Severity
+from app.models import Category, CategoryVersion, Severity
 from app.schemas.categories import CategoryCreate, CategoryUpdate
-from app.services.categories import create_category, seed_default_categories, update_category
+from app.services.categories import (
+    create_category,
+    rollback_category,
+    seed_default_categories,
+    update_category,
+)
 
 
 def test_seed_and_update_categories() -> None:
@@ -26,3 +31,21 @@ def test_seed_and_update_categories() -> None:
         )
         updated = update_category(session, custom, CategoryUpdate(is_active=False))
         assert updated.is_active is False
+        versions = list(
+            session.scalars(select(CategoryVersion).where(CategoryVersion.category_id == custom.id))
+        )
+        assert len(versions) == 2
+        assert versions[0].snapshot["is_active"] is True
+
+        restored = rollback_category(session, custom, versions[0])
+        assert restored.is_active is True
+        assert (
+            len(
+                list(
+                    session.scalars(
+                        select(CategoryVersion).where(CategoryVersion.category_id == custom.id)
+                    )
+                )
+            )
+            == 3
+        )
