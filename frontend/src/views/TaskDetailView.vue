@@ -142,6 +142,26 @@ onBeforeUnmount(() => timer && clearInterval(timer))
     </div>
     <el-card v-if="latest" class="panel" shadow="never"
       ><template #header><strong>人工评测结果</strong></template>
+      <el-alert
+        v-if="latest.insight_status === 'fallback'"
+        type="warning"
+        :closable="false"
+        title="AI 优化建议生成失败，当前仅展示规则化误判分析"
+        :description="latest.insight_error || 'DeepSeek 未返回有效的误判分析与优化建议。'"
+        style="margin-bottom: 16px"
+      />
+      <el-alert
+        v-else-if="
+          latest.insight_status === 'unknown' &&
+          latest.analyses?.length &&
+          !latest.suggestions?.length
+        "
+        type="warning"
+        :closable="false"
+        title="该历史评测未生成优化建议"
+        description="历史数据未记录 DeepSeek 分析状态；请重新上传人工标注进行比较。"
+        style="margin-bottom: 16px"
+      />
       <div class="metric-grid" style="margin: 0">
         <div class="metric-card">
           <span>Recall 检出率</span

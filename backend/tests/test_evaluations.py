@@ -15,10 +15,12 @@ from app.models import (
     Severity,
 )
 from app.schemas.evaluations import EvaluationRead, GroundTruthBatch, GroundTruthItem
+from app.services.deepseek import DeepSeekClient, DeepSeekError
 from app.services.evaluations import (
     _fallback_analysis,
     build_error_cases,
     calculate_metrics,
+    create_evaluation_insights,
     decide_suggestion,
     validate_ground_truth_ids,
 )
@@ -175,6 +177,50 @@ def test_build_error_cases_keeps_context_for_analysis() -> None:
     reason, cause = _fallback_analysis(cases[0])
     assert "人工分类为“政策偏差”" in reason
     assert "不做任何映射" in cause
+
+
+@pytest.mark.asyncio
+async def test_insight_failure_is_visible_without_deterministic_suggestions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    item = prediction("h01", True, "政策与优惠错误")
+    truths = [GroundTruthItem(id="h01", is_hallucination=True, hallucination_type="政策编造")]
+
+    async def fail_analysis(*_args: object, **_kwargs: object) -> object:
+        raise DeepSeekError("模型未返回有效建议")
+
+    monkeypatch.setattr(DeepSeekClient, "analyze_evaluation", fail_analysis)
+    with Session(engine) as session:
+        session.add_all(
+            [
+                Category(
+                    name="政策与优惠错误",
+                    description="宽泛政策分类",
+                    default_severity=Severity.HIGH,
+                ),
+                Category(
+                    name="政策编造",
+                    description="人工细分类",
+                    default_severity=Severity.HIGH,
+                ),
+            ]
+        )
+        evaluation = Evaluation(
+            task_id="task",
+            metrics=calculate_metrics([item], truths),
+            ground_truth_count=1,
+        )
+        session.add(evaluation)
+        session.flush()
+
+        await create_evaluation_insights(session, evaluation, [item], truths)
+
+        assert evaluation.insight_status == "fallback"
+        assert evaluation.insight_error == "模型未返回有效建议"
+        assert evaluation.suggestions == []
+        assert len(evaluation.analyses) == 1
 
 
 def test_apply_suggestion_updates_category_and_creates_version() -> None:

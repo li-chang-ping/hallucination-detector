@@ -79,6 +79,8 @@ export interface Evaluation {
   task_id: string
   metrics: Record<string, any>
   ground_truth_count: number
+  insight_status: 'pending' | 'completed' | 'fallback' | 'unknown'
+  insight_error: string | null
   created_at: string
   analyses: EvaluationAnalysis[]
   suggestions: CategorySuggestion[]

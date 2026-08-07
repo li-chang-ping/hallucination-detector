@@ -1,4 +1,3 @@
-from contextlib import suppress
 from typing import cast
 
 from sqlalchemy import select
@@ -194,6 +193,9 @@ async def create_evaluation_insights(
 ) -> None:
     error_cases = build_error_cases(predictions, truths, evaluation.metrics)
     if not error_cases:
+        evaluation.insight_status = "completed"
+        evaluation.insight_error = None
+        session.commit()
         return
     categories = list(session.scalars(select(Category).where(Category.is_archived.is_(False))))
     category_payload: list[dict[str, object]] = [
@@ -206,8 +208,13 @@ async def create_evaluation_insights(
         for item in categories
     ]
     generated = EvaluationAnalysisResponse(analyses=[], suggestions=[])
-    with suppress(DeepSeekError):
+    try:
         generated = await DeepSeekClient().analyze_evaluation(error_cases, category_payload)
+        evaluation.insight_status = "completed"
+        evaluation.insight_error = None
+    except DeepSeekError as exc:
+        evaluation.insight_status = "fallback"
+        evaluation.insight_error = str(exc)[:2000]
     # 分析属于增强能力，失败时不能让已经完成的人工评测回滚。
     generated_map: dict[tuple[str, str], object] = {
         (item.input_id, item.error_type): item for item in generated.analyses

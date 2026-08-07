@@ -150,6 +150,8 @@ class Evaluation(Base):
     )
     metrics: Mapped[dict[str, object]] = mapped_column(JSON)
     ground_truth_count: Mapped[int]
+    insight_status: Mapped[str] = mapped_column(String(20), default="pending")
+    insight_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     analyses: Mapped[list["EvaluationAnalysis"]] = relationship(
         back_populates="evaluation", cascade="all, delete-orphan"

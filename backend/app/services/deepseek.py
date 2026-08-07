@@ -100,6 +100,8 @@ class DeepSeekClient:
                 "create 用于缺少必要分类，target_category_name 是新分类名",
                 "update 可修改 name、description、prompt_guidance、default_severity",
                 "archive 仅用于确认冗余或错误的现有分类，不包含 proposed 字段",
+                "当人工分类名称已经存在，但模型持续选择不属于人工标签的重叠或宽泛分类时，"
+                "优先建议 archive 导致误报的重叠分类，不得重复 create 已有人工分类",
                 "名称一对一不一致时可用 update 修改 name",
                 "现有宽泛分类对应多个人工分类时，必须 create 每个缺失的人工同名分类",
                 "不得仅修改描述或指引来处理名称不一致，因为这不会改善严格比较结果",
@@ -140,6 +142,14 @@ class DeepSeekClient:
                     response.raise_for_status()
                     content = response.json()["choices"][0]["message"]["content"]
                     result = EvaluationAnalysisResponse.model_validate_json(content)
+                    expected_cases = {
+                        (str(item["input_id"]), str(item["error_type"])) for item in error_cases
+                    }
+                    actual_cases = {(item.input_id, item.error_type) for item in result.analyses}
+                    missing_cases = expected_cases - actual_cases
+                    if missing_cases:
+                        missing_ids = ", ".join(sorted(item_id for item_id, _ in missing_cases))
+                        raise ValueError(f"缺少误判分析: {missing_ids}")
                     missing_names = {
                         str(item["human_category"])
                         for item in error_cases
@@ -160,6 +170,8 @@ class DeepSeekClient:
         allowed_names: set[str],
         missing_names: set[str],
     ) -> None:
+        if not result.suggestions:
+            raise ValueError("存在误判但未返回优化建议")
         unknown = {
             item.target_category_name
             for item in result.suggestions

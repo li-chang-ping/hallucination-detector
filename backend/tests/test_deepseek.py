@@ -38,6 +38,15 @@ def test_suggestion_validation_requires_name_alignment() -> None:
         )
 
 
+def test_suggestion_validation_rejects_empty_result_when_errors_exist() -> None:
+    with pytest.raises(ValueError, match="存在误判但未返回优化建议"):
+        DeepSeekClient._validate_suggestions(
+            EvaluationAnalysisResponse(analyses=[], suggestions=[]),
+            {"政策与优惠错误", "政策编造"},
+            set(),
+        )
+
+
 def test_suggestion_validation_accepts_create_or_rename() -> None:
     result = EvaluationAnalysisResponse(
         analyses=[],

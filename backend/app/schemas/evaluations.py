@@ -103,6 +103,8 @@ class EvaluationRead(BaseModel):
     task_id: str
     metrics: dict[str, object]
     ground_truth_count: int
+    insight_status: str = "unknown"
+    insight_error: str | None = None
     created_at: datetime
     analyses: list[EvaluationAnalysisRead] = Field(default_factory=list)
     suggestions: list[CategorySuggestionRead] = Field(default_factory=list)

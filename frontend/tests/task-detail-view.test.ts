@@ -21,14 +21,44 @@ const task = {
   updated_at: '2026-08-08T00:00:00Z',
   items: [],
 }
+let evaluationData: unknown[] = []
 
 describe('TaskDetailView', () => {
   beforeEach(() => {
+    evaluationData = []
     apiMocks.get.mockReset()
     apiMocks.post.mockReset()
     apiMocks.get.mockImplementation((url: string) =>
-      Promise.resolve({ data: url.includes('/evaluations/') ? [] : task }),
+      Promise.resolve({ data: url.includes('/evaluations/') ? evaluationData : task }),
     )
+  })
+
+  it('shows the DeepSeek insight failure reason', async () => {
+    evaluationData = [
+      {
+        id: 'evaluation-1',
+        task_id: 'task-1',
+        metrics: { recall: 0.8, precision: 0.7, fn: 1, fp: 2 },
+        ground_truth_count: 20,
+        insight_status: 'fallback',
+        insight_error: 'DeepSeek 连续三次未返回有效建议',
+        created_at: '2026-08-08T00:00:00Z',
+        analyses: [],
+        suggestions: [],
+      },
+    ]
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/tasks/:id', component: TaskDetailView }],
+    })
+    await router.push('/tasks/task-1')
+    await router.isReady()
+    const wrapper = mount(TaskDetailView, { global: { plugins: [ElementPlus, router] } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('AI 优化建议生成失败')
+    expect(wrapper.text()).toContain('DeepSeek 连续三次未返回有效建议')
+    wrapper.unmount()
   })
 
   it('shows loading and comparison progress until evaluation completes', async () => {
