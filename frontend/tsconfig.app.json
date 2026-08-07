@@ -1,5 +1,10 @@
 {
   "extends": "@vue/tsconfig/tsconfig.dom.json",
   "include": ["src/**/*.ts", "src/**/*.vue", "src/**/*.d.ts", "tests/**/*.ts"],
-  "compilerOptions": { "strict": true, "baseUrl": ".", "paths": { "@/*": ["src/*"] } }
+  "compilerOptions": {
+    "strict": true,
+    "types": ["vitest/globals"],
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] }
+  }
 }

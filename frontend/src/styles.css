@@ -1,4 +1,235 @@
-:root { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; color: #172033; background: #f4f7fb; }
-* { box-sizing: border-box; }
-body { margin: 0; }
-.shell { max-width: 1120px; margin: 0 auto; padding: 48px 24px; }
+:root {
+  font-family: Inter, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: #182238;
+  background: #f4f7fb;
+  font-synthesis: none;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 1180px;
+  background: #f4f7fb;
+}
+.app-shell {
+  min-height: 100vh;
+}
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  background: #101b35;
+  color: #fff;
+}
+.app-shell > .el-container {
+  margin-left: 248px;
+}
+.brand {
+  height: 86px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 0 24px;
+  border-bottom: 1px solid #26324b;
+}
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #5576ff, #42d0c6);
+  color: white;
+}
+.brand-mark svg {
+  width: 23px;
+}
+.brand strong,
+.brand span {
+  display: block;
+}
+.brand strong {
+  font-size: 18px;
+  letter-spacing: 0.3px;
+}
+.brand span {
+  margin-top: 4px;
+  color: #8f9bb5;
+  font-size: 12px;
+}
+.nav-menu {
+  border: 0 !important;
+  background: transparent !important;
+  padding: 18px 14px;
+}
+.nav-menu .el-menu-item {
+  color: #aeb8cc;
+  border-radius: 10px;
+  margin: 5px 0;
+}
+.nav-menu .el-menu-item:hover {
+  color: #fff;
+  background: #1b2949;
+}
+.nav-menu .el-menu-item.is-active {
+  color: #fff;
+  background: linear-gradient(90deg, #3f5fe5, #456ce9);
+  box-shadow: 0 8px 24px #233b8c66;
+}
+.sidebar-note {
+  margin: auto 24px 24px;
+  padding-top: 18px;
+  border-top: 1px solid #26324b;
+  color: #8f9bb5;
+  font-size: 12px;
+}
+.online-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: #39d3a0;
+  box-shadow: 0 0 0 4px #39d3a022;
+}
+.topbar {
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  background: #fff;
+  border-bottom: 1px solid #e8edf5;
+}
+.topbar strong {
+  font-size: 16px;
+}
+.crumb {
+  margin-right: 12px;
+  color: #97a0b2;
+  font-size: 13px;
+}
+.main-content {
+  padding: 28px 32px 48px;
+}
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 22px;
+}
+.page-heading h2 {
+  margin: 0;
+  font-size: 25px;
+  letter-spacing: -0.5px;
+}
+.page-heading p {
+  margin: 7px 0 0;
+  color: #7c879b;
+  font-size: 14px;
+}
+.panel {
+  border: 1px solid #e9edf5 !important;
+  border-radius: 14px !important;
+  box-shadow: 0 4px 18px #1a2f5a0d !important;
+}
+.panel + .panel {
+  margin-top: 18px;
+}
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  display: inline-block;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #9aa4b4;
+}
+.status-running,
+.status-preparing,
+.status-queued {
+  background: #4770ef;
+}
+.status-completed {
+  background: #18b981;
+}
+.status-paused {
+  background: #f2a23a;
+}
+.status-partial,
+.status-failed {
+  background: #e85d67;
+}
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.metric-card {
+  padding: 19px 20px;
+  border: 1px solid #e8edf5;
+  border-radius: 13px;
+  background: #fff;
+}
+.metric-card span {
+  color: #7f899b;
+  font-size: 13px;
+}
+.metric-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 27px;
+}
+.metric-card small {
+  color: #9ba4b4;
+}
+.danger-value {
+  color: #e04e5d;
+}
+.success-value {
+  color: #18a978;
+}
+.upload-box {
+  width: 100%;
+}
+.upload-box .el-upload,
+.upload-box .el-upload-dragger {
+  width: 100%;
+}
+.empty-hint {
+  padding: 36px;
+  text-align: center;
+  color: #98a1b2;
+}
+.evidence-card {
+  padding: 12px;
+  margin-bottom: 10px;
+  border: 1px solid #e9edf5;
+  border-radius: 9px;
+  background: #f8faff;
+}
+.evidence-card p {
+  margin: 6px 0;
+  line-height: 1.65;
+}
+.mono-id {
+  font-family: 'Cascadia Code', monospace;
+  color: #526079;
+  font-size: 12px;
+}
+.clamp {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
