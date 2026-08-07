@@ -38,7 +38,15 @@ describe('TaskDetailView', () => {
       {
         id: 'evaluation-1',
         task_id: 'task-1',
-        metrics: { recall: 0.8, precision: 0.7, fn: 1, fp: 2 },
+        metrics: {
+          recall: 0.8,
+          accuracy: 0.3,
+          evaluated_count: 20,
+          tp: 5,
+          tn: 1,
+          fn: 1,
+          fp: 13,
+        },
         ground_truth_count: 20,
         insight_status: 'fallback',
         insight_error: 'DeepSeek 连续三次未返回有效建议',
@@ -58,6 +66,10 @@ describe('TaskDetailView', () => {
 
     expect(wrapper.text()).toContain('AI 优化建议生成失败')
     expect(wrapper.text()).toContain('DeepSeek 连续三次未返回有效建议')
+    expect(wrapper.text()).toContain('Accuracy 正确率')
+    expect(wrapper.text()).toContain('30.0%')
+    expect(wrapper.text()).toContain('正确 6 / 20 条')
+    expect(wrapper.text()).not.toContain('Precision 准确率')
     wrapper.unmount()
   })
 

@@ -169,8 +169,12 @@ onBeforeUnmount(() => timer && clearInterval(timer))
           ><small>漏检 {{ latest.metrics.fn }} 条 · 人工为幻觉，模型判正常</small>
         </div>
         <div class="metric-card">
-          <span>Precision 准确率</span><strong>{{ percent(latest.metrics.precision) }}</strong
-          ><small>误报 {{ latest.metrics.fp }} 条 · 人工判正常或分类不一致</small>
+          <span>Accuracy 正确率</span><strong>{{ percent(latest.metrics.accuracy) }}</strong
+          ><small
+            >正确 {{ Number(latest.metrics.tp || 0) + Number(latest.metrics.tn || 0) }} /
+            {{ latest.metrics.evaluated_count || latest.ground_truth_count }} 条 ·
+            幻觉判定和分类均需与人工一致</small
+          >
         </div>
       </div>
       <el-alert
