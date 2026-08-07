@@ -8,7 +8,9 @@ from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.routers.categories import router as categories_router
 from app.routers.knowledge import router as knowledge_router
+from app.routers.tasks import router as tasks_router
 from app.services.categories import seed_default_categories
+from app.services.task_runner import recover_interrupted_tasks
 
 
 @asynccontextmanager
@@ -17,6 +19,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as session:
         seed_default_categories(session)
+    recover_interrupted_tasks()
     yield
 
 
@@ -31,6 +34,7 @@ app.add_middleware(
 )
 app.include_router(categories_router, prefix=settings.api_prefix)
 app.include_router(knowledge_router, prefix=settings.api_prefix)
+app.include_router(tasks_router, prefix=settings.api_prefix)
 
 
 @app.get("/api/v1/health", tags=["system"])
