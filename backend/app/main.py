@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.routers.categories import router as categories_router
+from app.routers.knowledge import router as knowledge_router
 from app.services.categories import seed_default_categories
 
 
@@ -29,6 +30,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(categories_router, prefix=settings.api_prefix)
+app.include_router(knowledge_router, prefix=settings.api_prefix)
 
 
 @app.get("/api/v1/health", tags=["system"])
