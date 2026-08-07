@@ -94,7 +94,6 @@ onMounted(load)
   <div class="page-heading">
     <div>
       <h2>知识库管理</h2>
-      <p>通过 Ollama 中文向量模型建立可追溯的检测证据。</p>
     </div>
     <el-button type="primary" :icon="Upload" @click="importVisible = true">导入 JSON</el-button>
   </div>
@@ -114,7 +113,12 @@ onMounted(load)
             ><el-button link type="danger" :icon="Delete" @click.stop="removeKb(kb)" />
           </div>
           <p>{{ kb.description || '暂无描述' }}</p>
-          <el-tag size="small" effect="plain">{{ kb.entry_count }} 条</el-tag>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <el-tag size="small" effect="plain">{{ kb.entry_count }} 条</el-tag>
+            <el-tag size="small" type="info" effect="plain">
+              嵌入模型：{{ kb.embedding_model }}
+            </el-tag>
+          </div>
         </div>
         <div v-if="!bases.length" class="empty-hint">请先导入知识库</div></el-card
       ></el-col
@@ -123,7 +127,12 @@ onMounted(load)
       ><el-card class="panel" shadow="never"
         ><template #header
           ><div style="display: flex; justify-content: space-between">
-            <strong>{{ selected?.name || '知识条目' }}</strong
+            <div>
+              <strong>{{ selected?.name || '知识条目' }}</strong>
+              <span v-if="selected" class="model-label">
+                嵌入模型：{{ selected.embedding_model }}
+              </span>
+            </div>
             ><el-button v-if="selected" type="primary" plain :icon="Plus" @click="open()"
               >新增条目</el-button
             >
@@ -181,3 +190,10 @@ onMounted(load)
     ></el-dialog
   >
 </template>
+<style scoped>
+.model-label {
+  margin-left: 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+</style>
