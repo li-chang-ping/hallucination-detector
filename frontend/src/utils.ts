@@ -29,6 +29,7 @@ export function formatCategoryMismatches(items: CategoryMismatch[]): string {
 }
 
 const categoryFieldLabels: Record<string, string> = {
+  name: '分类名称',
   description: '分类定义',
   prompt_guidance: '判定指引',
   default_severity: '默认严重度',

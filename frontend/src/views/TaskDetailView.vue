@@ -15,6 +15,7 @@ const route = useRoute(),
   activeItem = ref<DetectionItem>(),
   evaluationFile = ref<UploadRawFile>()
 const suggestionBusy = ref<string>()
+const suggestionActionLabels = { create: '新增', update: '修改', archive: '归档' } as const
 let timer: number | undefined
 const latest = computed(() => evaluations.value[0]),
   hallucinations = computed(() => task.value?.items?.filter((x) => x.is_hallucination).length || 0),
@@ -166,6 +167,7 @@ onBeforeUnmount(() => timer && clearInterval(timer))
           <div v-for="suggestion in latest.suggestions" :key="suggestion.id" class="analysis-card">
             <div class="analysis-title">
               <strong>{{ suggestion.target_category_name }}</strong>
+              <el-tag type="primary">{{ suggestionActionLabels[suggestion.action] }}</el-tag>
               <el-tag v-if="suggestion.status === 'applied'" type="success">已采纳</el-tag>
               <el-tag v-else-if="suggestion.status === 'rejected'" type="info">已忽略</el-tag>
               <el-tag v-else>待处理</el-tag>
@@ -184,7 +186,7 @@ onBeforeUnmount(() => timer && clearInterval(timer))
                 size="small"
                 :loading="suggestionBusy === suggestion.id"
                 @click="decideSuggestion(suggestion, 'apply')"
-                >采纳并更新定义</el-button
+                >采纳并{{ suggestionActionLabels[suggestion.action] }}定义</el-button
               >
               <el-button size="small" @click="decideSuggestion(suggestion, 'reject')"
                 >忽略</el-button

@@ -97,10 +97,13 @@ export interface EvaluationAnalysis {
 
 export interface CategorySuggestion {
   id: string
-  category_id: string
+  category_id: string | null
+  action: 'create' | 'update' | 'archive'
   target_category_name: string
   reason: string
-  proposed_changes: Partial<Pick<Category, 'description' | 'prompt_guidance' | 'default_severity'>>
+  proposed_changes: Partial<
+    Pick<Category, 'name' | 'description' | 'prompt_guidance' | 'default_severity'>
+  >
   status: 'pending' | 'applied' | 'rejected'
   created_at: string
   decided_at: string | null

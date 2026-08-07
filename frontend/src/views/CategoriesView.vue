@@ -29,7 +29,9 @@ const severityLabels: Record<Severity, string> = {
 
 async function load() {
   try {
-    categories.value = (await api.get<Category[]>('/categories')).data
+    categories.value = (
+      await api.get<Category[]>('/categories', { params: { include_archived: true } })
+    ).data
   } catch (e) {
     ElMessage.error((e as Error).message)
   }
@@ -112,7 +114,10 @@ onMounted(load)
     ><el-table :data="categories"
       ><el-table-column prop="name" label="分类名称" width="190"
         ><template #default="{ row }"
-          ><strong>{{ row.name }}</strong></template
+          ><strong>{{ row.name }}</strong
+          ><el-tag v-if="row.is_archived" type="info" size="small" style="margin-left: 8px"
+            >已归档</el-tag
+          ></template
         ></el-table-column
       ><el-table-column prop="description" label="定义" min-width="280" /><el-table-column
         label="严重度"
@@ -138,14 +143,17 @@ onMounted(load)
         ><template #default="{ row }"
           ><el-switch
             v-model="row.is_active"
+            :disabled="row.is_archived"
             @change="
               api.put(`/categories/${row.id}`, { is_active: row.is_active })
             " /></template></el-table-column
       ><el-table-column label="操作" width="195"
         ><template #default="{ row }"
-          ><el-button link type="primary" @click="open(row)">编辑</el-button
+          ><el-button v-if="!row.is_archived" link type="primary" @click="open(row)">编辑</el-button
           ><el-button link @click="openHistory(row)">历史</el-button
-          ><el-button link type="danger" @click="archive(row)">归档</el-button></template
+          ><el-button v-if="!row.is_archived" link type="danger" @click="archive(row)"
+            >归档</el-button
+          ></template
         ></el-table-column
       ></el-table
     ></el-card
