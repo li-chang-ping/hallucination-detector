@@ -1,0 +1,4 @@
+:root { font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; color: #172033; background: #f4f7fb; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.shell { max-width: 1120px; margin: 0 auto; padding: 48px 24px; }
