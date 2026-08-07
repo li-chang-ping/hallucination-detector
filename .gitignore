@@ -1,0 +1,29 @@
+# Secrets and local configuration
+.env
+*.local
+
+# Python / Conda
+.conda/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Runtime data
+data/
+screenshots/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
