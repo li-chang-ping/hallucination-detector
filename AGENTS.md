@@ -115,6 +115,7 @@ powershell -ExecutionPolicy Bypass -File scripts/quality.ps1
 
 - 后端：Ruff check、Ruff format check、mypy、pytest。
 - 前端：ESLint、Prettier check、Vitest、vue-tsc 和 Vite 生产构建。
+- 测试 DeepSeek/LLM 实际调用链时必须使用真实 API，不得 mock LLM 响应；纯本地的 schema、解析和建议校验逻辑仍使用单元测试。真实调用测试从 `.env` 读取 `DEEPSEEK_API_KEY`，不得输出密钥。
 
 需要单独执行时：
 

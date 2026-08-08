@@ -19,6 +19,7 @@ from app.schemas.evaluations import EvaluationRead, GroundTruthBatch, GroundTrut
 from app.services.deepseek import DeepSeekClient, DeepSeekError
 from app.services.evaluations import (
     _fallback_analysis,
+    build_category_performance,
     build_error_cases,
     calculate_metrics,
     create_evaluation_insights,
@@ -120,6 +121,33 @@ def test_category_mismatch_is_counted_as_business_false_positive() -> None:
         }
     ]
     assert metrics["binary_confusion_matrix"] == {"tp": 1, "tn": 0, "fp": 0, "fn": 0}
+
+
+def test_category_performance_preserves_correct_hits_and_mismatches() -> None:
+    predictions = [
+        prediction("h07", True, "信息编造"),
+        prediction("h16", True, "信息编造"),
+        prediction("h20", True, "信息编造"),
+    ]
+    truths = [
+        GroundTruthItem(id="h07", is_hallucination=True, hallucination_type="信息编造"),
+        GroundTruthItem(id="h16", is_hallucination=False),
+        GroundTruthItem(id="h20", is_hallucination=True, hallucination_type="信息遗漏"),
+    ]
+
+    performance = build_category_performance(predictions, truths)
+
+    assert performance == [
+        {
+            "category_name": "信息编造",
+            "predicted_count": 3,
+            "correct_count": 1,
+            "mismatches": [
+                {"input_id": "h16", "expected_category": "正常"},
+                {"input_id": "h20", "expected_category": "信息遗漏"},
+            ],
+        }
+    ]
 
 
 def test_primary_category_mismatch_is_business_false_positive() -> None:

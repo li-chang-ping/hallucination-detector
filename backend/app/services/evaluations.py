@@ -182,6 +182,43 @@ def calculate_metrics(
     }
 
 
+def build_category_performance(
+    predictions: list[DetectionItem], truths: list[GroundTruthItem]
+) -> list[dict[str, object]]:
+    """汇总分类的正确使用和误选情况，防止优化建议误删仍然有效的分类。"""
+    truth_map = {item.id: item for item in truths}
+    performance: dict[str, dict[str, object]] = {}
+    for prediction in predictions:
+        truth = truth_map.get(prediction.input_id)
+        if truth is None or prediction.is_hallucination is None:
+            continue
+        predicted_name = prediction.primary_category if prediction.is_hallucination else "正常"
+        expected_name = truth.hallucination_type if truth.is_hallucination else "正常"
+        predicted_name = predicted_name or "未分类"
+        expected_name = expected_name or "未分类"
+        stats = performance.setdefault(
+            predicted_name,
+            {
+                "category_name": predicted_name,
+                "predicted_count": 0,
+                "correct_count": 0,
+                "mismatches": [],
+            },
+        )
+        stats["predicted_count"] = cast(int, stats["predicted_count"]) + 1
+        if predicted_name == expected_name:
+            stats["correct_count"] = cast(int, stats["correct_count"]) + 1
+        else:
+            mismatches = cast(list[dict[str, str]], stats["mismatches"])
+            mismatches.append(
+                {
+                    "input_id": prediction.input_id,
+                    "expected_category": expected_name,
+                }
+            )
+    return sorted(performance.values(), key=lambda item: str(item["category_name"]))
+
+
 def _expected_category(truth: GroundTruthItem) -> str | None:
     if not truth.is_hallucination or not truth.hallucination_type:
         return None
@@ -278,12 +315,14 @@ async def create_evaluation_insights(
         }
         for item in categories
     ]
+    category_performance = build_category_performance(predictions, truths)
     generated = EvaluationAnalysisResponse(analyses=[], suggestions=[])
     analysis_succeeded = False
     try:
         generated = await DeepSeekClient().analyze_evaluation(
             error_cases,
             category_payload,
+            category_performance=category_performance,
             progress_callback=lambda stage, progress: record_evaluation_progress(
                 session, evaluation, stage, progress
             ),

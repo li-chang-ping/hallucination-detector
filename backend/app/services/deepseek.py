@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import ValidationError
@@ -73,6 +73,7 @@ class DeepSeekClient:
         self,
         error_cases: list[dict[str, object]],
         categories: list[dict[str, object]],
+        category_performance: list[dict[str, object]] | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
     ) -> EvaluationAnalysisResponse:
         """分析已由确定性指标识别出的误判，不允许模型改写误判清单。"""
@@ -87,25 +88,44 @@ class DeepSeekClient:
         human_names = {
             str(item["human_category"]) for item in error_cases if item.get("human_category")
         }
-        mismatch_sources = {
+        existing_human_names = human_names & allowed_names
+        migration_sources = {
             str(item["predicted_category"])
             for item in error_cases
             if item.get("predicted_category")
             and item.get("human_category")
-            and item["predicted_category"] != item["human_category"]
+            and str(item["human_category"]) in missing_names
         }
-        existing_human_names = human_names & allowed_names
-        obsolete_sources = mismatch_sources - human_names
+        performance = category_performance or []
+        protected_names = existing_human_names | {
+            str(item["category_name"])
+            for item in performance
+            if item.get("category_name") not in {None, "正常", "未分类"}
+            and cast(int, item.get("correct_count", 0)) > 0
+        }
         payload_data = {
             "error_cases": error_cases,
             "current_categories": categories,
+            "category_performance": performance,
             "evaluation_rule": (
                 "人工分类与模型分类按名称完全一致比较，不允许任何映射；"
                 "名称不同即使语义接近也计为误报。"
             ),
             "missing_human_category_names": sorted(missing_names),
             "existing_human_category_names": sorted(existing_human_names),
-            "obsolete_prediction_category_names": sorted(obsolete_sources),
+            "protected_category_names": sorted(protected_names),
+            "migration_source_category_names": sorted(migration_sources),
+            "boundary_mismatches": [
+                {
+                    "input_id": item.get("input_id"),
+                    "predicted_category": item.get("predicted_category"),
+                    "human_category": item.get("human_category"),
+                }
+                for item in error_cases
+                if item.get("predicted_category")
+                and item.get("human_category")
+                and item["predicted_category"] != item["human_category"]
+            ],
             "output_json_schema": EvaluationAnalysisResponse.model_json_schema(),
             "requirements": [
                 "逐条解释误判形成原因，analysis 的 input_id 和 error_type 必须与输入一致",
@@ -114,19 +134,24 @@ class DeepSeekClient:
                 "create 用于缺少必要分类，target_category_name 是新分类名",
                 "update 可修改 name、description、prompt_guidance、default_severity",
                 "archive 仅用于确认冗余或错误的现有分类，不包含 proposed 字段",
-                "当人工分类名称已经存在，但模型持续选择不属于人工标签的重叠或宽泛分类时，"
-                "优先建议 archive 导致误报的重叠分类，不得重复 create 已有人工分类",
+                "先查看 category_performance；correct_count 大于 0 表示该分类仍有正确用途，"
+                "不得因少量误选而删除或改名",
                 "existing_human_category_names 中的分类是需要保留的人工标准分类，不得归档，"
                 "也不得将其反向重命名为模型误选的分类",
-                "obsolete_prediction_category_names 中的分类应优先归档；人工同名分类已经存在时，"
-                "不得把旧分类重命名为该名称",
-                "名称一对一不一致时可用 update 修改 name",
+                "protected_category_names 中的分类不得 archive 或修改 name；"
+                "可以 update description 和 prompt_guidance 来澄清与相邻分类的边界",
+                "当人工分类和模型分类都已存在时，这是边界误选问题；优先 update 相关分类的"
+                "description 或 prompt_guidance，禁止 create、archive 或相互重命名",
+                "只有人工分类名称缺失时才属于结构迁移；创建缺失分类后，必须归档、重命名或"
+                "更新 migration_source_category_names 中旧分类的边界，避免旧定义继续误选",
+                "名称一对一不一致且目标名称尚不存在时，才可用 update 修改 name",
                 "现有宽泛分类对应多个人工分类时，必须 create 每个缺失的人工同名分类",
-                "不得仅修改描述或指引来处理名称不一致，因为这不会改善严格比较结果",
+                "名称都已存在时，修改描述或指引的目标是让下一轮模型选择正确的已有名称",
                 "同一个目标名称只能选择 create 或重命名其中一种，不得生成冲突建议",
                 "把全部 suggestions 作为一套原子执行的分类迁移方案，不得包含互相冲突的操作",
                 "一对一名称替换应 update 旧分类名称，不要 create 语义相同的新分类",
-                "一个宽泛旧分类拆为多个人工细分类时，必须 create 缺失细分类并 archive 旧分类",
+                "一个宽泛旧分类拆为多个人工细分类时，必须 create 缺失细分类；"
+                "旧分类 correct_count 为 0 时可 archive，仍有正确命中时必须保留并 update 边界",
                 "不得把分类重命名为任何已有分类名称，也不得让多个分类重命名为同一名称",
                 "存在误判时至少给出一条可执行的分类优化建议",
                 "不要输出思维过程",
@@ -191,8 +216,8 @@ class DeepSeekClient:
                         result,
                         allowed_names,
                         missing_names,
-                        mismatch_sources=mismatch_sources,
-                        human_names=human_names,
+                        migration_sources=migration_sources,
+                        protected_names=protected_names,
                     )
                     if progress_callback:
                         progress_callback("优化方案校验通过，正在保存结果", 92)
@@ -213,7 +238,10 @@ class DeepSeekClient:
                                 {
                                     "role": "user",
                                     "content": self._build_evaluation_correction(
-                                        str(exc), existing_human_names, obsolete_sources
+                                        str(exc),
+                                        existing_human_names,
+                                        migration_sources,
+                                        protected_names,
                                     ),
                                 },
                             ]
@@ -225,17 +253,21 @@ class DeepSeekClient:
     def _build_evaluation_correction(
         validation_error: str,
         existing_human_names: set[str],
-        obsolete_sources: set[str],
+        migration_sources: set[str],
+        protected_names: set[str],
     ) -> str:
         """将本地校验错误反馈给模型，要求修正整套建议而不是盲目重试。"""
         correction = {
             "validation_error": validation_error,
             "existing_human_category_names": sorted(existing_human_names),
-            "obsolete_prediction_category_names": sorted(obsolete_sources),
+            "protected_category_names": sorted(protected_names),
+            "migration_source_category_names": sorted(migration_sources),
             "correction_rules": [
                 "重新输出完整 JSON，不要只输出修改片段",
                 "保留已存在的人工标准分类，禁止将其重命名为模型误选分类",
-                "人工标准分类已存在时，优先归档导致误报的旧分类",
+                "有正确命中的受保护分类不得归档或改名",
+                "人工分类和模型分类都存在时，使用 update 修改定义或判断指引以澄清边界",
+                "只有缺失人工分类时才新增，并同步处理 migration_source_category_names",
                 "不得重命名为任何现有分类名称",
                 "所有 suggestions 必须构成可原子执行且无冲突的完整方案",
             ],
@@ -250,8 +282,8 @@ class DeepSeekClient:
         allowed_names: set[str],
         missing_names: set[str],
         *,
-        mismatch_sources: set[str] | None = None,
-        human_names: set[str] | None = None,
+        migration_sources: set[str] | None = None,
+        protected_names: set[str] | None = None,
     ) -> None:
         if not result.suggestions:
             raise ValueError("存在误判但未返回优化建议")
@@ -296,6 +328,17 @@ class DeepSeekClient:
         archive_names = {
             item.target_category_name for item in result.suggestions if item.action == "archive"
         }
+        protected_changes = (protected_names or set()) & archive_names
+        renamed_sources = {
+            item.target_category_name
+            for item in result.suggestions
+            if item.action == "update" and item.proposed_name
+        }
+        protected_changes |= (protected_names or set()) & renamed_sources
+        if protected_changes:
+            raise ValueError(
+                "仍有正确命中的分类不能归档或改名: " + ", ".join(sorted(protected_changes))
+            )
         archive_rename_conflicts = archive_names & renamed_names
         if archive_rename_conflicts:
             raise ValueError(
@@ -304,16 +347,18 @@ class DeepSeekClient:
         unresolved = missing_names - create_names - renamed_names
         if unresolved:
             raise ValueError(f"缺少分类名称对齐建议: {', '.join(sorted(unresolved))}")
-        obsolete_sources = (mismatch_sources or set()) - (human_names or set())
-        renamed_sources = {
+        boundary_updates = {
             item.target_category_name
             for item in result.suggestions
-            if item.action == "update" and item.proposed_name
+            if item.action == "update"
+            and (item.proposed_description or item.proposed_prompt_guidance)
         }
-        unresolved_sources = obsolete_sources - archive_names - renamed_sources
+        unresolved_sources = (
+            (migration_sources or set()) - archive_names - renamed_sources - boundary_updates
+        )
         if unresolved_sources:
             raise ValueError(
-                "新增细分类前必须归档或重命名持续误报的旧分类: "
+                "新增细分类前必须归档、重命名或更新持续误报的旧分类边界: "
                 + ", ".join(sorted(unresolved_sources))
             )
 
