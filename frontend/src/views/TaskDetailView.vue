@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { ArrowLeft, Refresh, Upload } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox, type UploadRawFile } from 'element-plus'
+import {
+  ElMessage,
+  ElMessageBox,
+  genFileId,
+  type UploadInstance,
+  type UploadProps,
+  type UploadRawFile,
+} from 'element-plus'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
@@ -21,7 +28,8 @@ const route = useRoute(),
   evaluations = ref<Evaluation[]>([]),
   drawer = ref(false),
   activeItem = ref<DetectionItem>(),
-  evaluationFile = ref<UploadRawFile>()
+  evaluationFile = ref<UploadRawFile>(),
+  evaluationUpload = ref<UploadInstance>()
 const suggestionPlanBusy = ref(false)
 const evaluating = ref(false)
 const evaluationProgress = ref(0)
@@ -57,6 +65,17 @@ async function load() {
 function show(item: DetectionItem) {
   activeItem.value = item
   drawer.value = true
+}
+const handleEvaluationExceed: UploadProps['onExceed'] = (files) => {
+  const replacement = files[0] as UploadRawFile
+  evaluationUpload.value?.clearFiles()
+  replacement.uid = genFileId()
+  evaluationUpload.value?.handleStart(replacement)
+  evaluationFile.value = replacement
+}
+function clearEvaluationFile() {
+  evaluationUpload.value?.clearFiles()
+  evaluationFile.value = undefined
 }
 async function evaluate() {
   if (!evaluationFile.value) return ElMessage.warning('请选择人工标注 JSON')
@@ -367,16 +386,28 @@ onBeforeUnmount(() => {
           <strong>逐条检测结果</strong>
           <div style="display: flex; gap: 8px">
             <el-upload
+              ref="evaluationUpload"
               :auto-upload="false"
               :limit="1"
               accept=".json"
               :show-file-list="false"
               :disabled="!canEvaluateTask(task.status) || evaluating"
               :on-change="(f: any) => (evaluationFile = f.raw)"
-              ><el-button :icon="Upload">选择人工标注</el-button></el-upload
+              :on-exceed="handleEvaluationExceed"
+              ><el-button :icon="Upload">{{
+                evaluationFile ? '重新选择' : '选择人工标注'
+              }}</el-button></el-upload
             ><span v-if="evaluationFile" class="selected-file-name" :title="evaluationFile.name">
               已选择：{{ evaluationFile.name }}
             </span>
+            <el-button
+              v-if="evaluationFile"
+              link
+              type="danger"
+              :disabled="evaluating"
+              @click="clearEvaluationFile"
+              >清除</el-button
+            >
             <el-button
               type="primary"
               :loading="evaluating"

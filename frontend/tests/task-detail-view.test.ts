@@ -142,6 +142,18 @@ describe('TaskDetailView', () => {
     selectFile({ raw: new File(['[]'], 'ground-truth.json', { type: 'application/json' }) })
     await flushPromises()
     expect(wrapper.text()).toContain('已选择：ground-truth.json')
+    expect(wrapper.text()).toContain('重新选择')
+
+    const replacement = new File(['[]'], 'correct-ground-truth.json', {
+      type: 'application/json',
+    })
+    const replaceFile = wrapper.findComponent({ name: 'ElUpload' }).props('onExceed') as (
+      files: File[],
+    ) => void
+    replaceFile([replacement])
+    await flushPromises()
+    expect(wrapper.text()).toContain('已选择：correct-ground-truth.json')
+    expect(wrapper.text()).not.toContain('已选择：ground-truth.json')
     const compareButton = wrapper
       .findAll('button')
       .find((button) => button.text().includes('开始比对'))
