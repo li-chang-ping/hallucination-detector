@@ -4,6 +4,7 @@ import {
   categoryChangeEntries,
   categorySnapshotStatus,
   formatCategoryMismatches,
+  formatTime,
   isDialogCancelled,
   percent,
   statusText,
@@ -12,6 +13,18 @@ import {
 
 describe('display utilities', () => {
   it('formats evaluation ratios', () => expect(percent(0.9444)).toBe('94.4%'))
+  it('treats timezone-less backend timestamps as UTC', () => {
+    const localeSpy = vi.spyOn(Date.prototype, 'toLocaleString').mockImplementation(function (
+      this: Date,
+    ) {
+      return this.toISOString()
+    })
+
+    expect(formatTime('2026-08-08T05:30:00')).toBe('2026-08-08T05:30:00.000Z')
+    expect(formatTime('2026-08-08T13:30:00+08:00')).toBe('2026-08-08T05:30:00.000Z')
+    expect(formatTime('invalid')).toBe('invalid')
+    localeSpy.mockRestore()
+  })
   it('provides Chinese task status', () => expect(statusText.paused).toBe('已暂停'))
   it('formats category mismatch details', () => {
     expect(

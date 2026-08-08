@@ -16,7 +16,12 @@ export function percent(value: unknown): string {
 }
 
 export function formatTime(value: string): string {
-  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+  const timestamp = value.trim()
+  // SQLite 会丢失 datetime 的时区标记，但后端约定所有时间均为 UTC。
+  // 没有偏移量时补上 Z，避免浏览器把 UTC 误当成本地时间而少显示 8 小时。
+  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? timestamp : `${timestamp}Z`
+  const date = new Date(normalized)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
 }
 
 export function formatCategoryMismatches(items: CategoryMismatch[]): string {
