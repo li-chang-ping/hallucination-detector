@@ -1,16 +1,8 @@
-# GroundLens 智能客服幻觉检测平台
-
-GroundLens 是面向智能客服回复的本地批量审计系统。它使用 Ollama 生成中文知识向量、Chroma 检索证据、DeepSeek 判断回复是否存在幻觉，并可上传人工标注计算漏检、误报及具体不一致 case。
-
-## 核心能力
-
-- 检测任务：JSON 批量导入，支持查看、暂停、继续、取消和进程重启后恢复。
-- 知识库：JSON 导入及条目增改删，向量由 `qwen3-embedding:0.6b` 生成并显式写入 Chroma。
-- 幻觉定义：六类默认体系，可维护描述、严重度、判定指引和启用状态；所有变更保留版本历史并支持回退。
-- 人工评测：输出 TP/TN/FP/FN、Precision、Recall、Accuracy，以及漏检、误报和分类不一致 ID。
-- 误判优化：对漏检和误报生成原因分析与定义优化建议，建议可新增、修改或归档分类；用户采纳后立即执行并保留回退版本。
+# 智能客服幻觉检测平台
 
 ## 幻觉分类体系
+
+在不参考0110附件\task4_ground_truth.json的情况下，和codex分析出以下幻觉分类体系：
 
 | 分类 | 默认严重度 | 判定范围 |
 |---|---|---|
@@ -25,80 +17,42 @@ GroundLens 是面向智能客服回复的本地批量审计系统。它使用 Ol
 
 ## 检测方法
 
-1. 将“用户问题 + 系统回复”发送到本地 Ollama `/api/embed`。
-2. 使用同一嵌入模型从选定 Chroma 集合检索前 5 条相关知识。
-3. 将证据、回复和启用分类快照发送到 DeepSeek JSON Output 接口。
-4. 用 Pydantic 校验单标签分类、严重度、置信度和理由；失败最多重试 3 次。
-5. 每条完成后写入 SQLite 检查点，暂停或异常重启不会丢失已有结果。
+整体流程如下：
 
-检测输入中的 `knowledge_base` 字段会被忽略，证据只从 Chroma 获取。这样可以验证真实 RAG 链路，而不是把标准答案直接拼入提示词。
+1. **证据检索**：将“用户问题 + 客服回复”交给本地 Ollama 的 `qwen3-embedding:0.6b` 生成向量，使用余弦距离从任务选定的 Chroma 知识库检索前 5 条证据。系统校验知识库索引与查询使用同一嵌入模型，并在任务开始时保存证据快照，避免知识库后续修改影响本次结果。
+2. **模型判定**：把问题、回复、证据快照和任务创建时的启用分类快照发送给真实 DeepSeek API。接口采用 `temperature=0` 和 JSON Output；Pydantic 严格校验是否幻觉、唯一主分类、严重程度、置信度和理由，网络错误、空响应或非法 JSON 最多重试 3 次。
+3. **任务容错**：每条回复独立检测并立即把结果、证据和 Token 用量写入 SQLite。单条失败不会丢弃其他结果；暂停、取消在当前请求结束后生效，异常重启后保留已完成检查点。
+4. **人工评测**：人工标注必须与任务中的全部 ID 完整对应。幻觉判定错误计为漏检或误报；当双方都判为幻觉但主分类名称不完全一致时，同样按业务误报处理，不进行分类映射。页面展示检出率、全部样本正确率、漏检 ID、误报 ID 和逐条分类差异。
+5. **误判分析与优化**：存在漏检或误报时，再调用 DeepSeek 分析当前误判。提示词包含原问题与回复、检索证据、人工分类、模型分类、当前分类定义、各分类表现，以及最近若干轮的准确率、反复错配、回退样本和已采纳建议；历史轮数和上下文字符上限可配置。分析进度持续展示在页面上。
+6. **定义闭环**：DeepSeek 可以给出新增、修改或归档分类的原子优化方案。用户选择采纳后，系统直接更新幻觉定义并保留完整历史版本，可在幻觉定义管理中回退；下一轮检测使用更新后的分类快照验证正确率是否提升。
 
-## 本地环境
+检测文件即使带有 `knowledge_base` 字段也会忽略该字段，正式证据只允许来自 Chroma 检索，避免把附件内联知识或人工答案直接送给判断模型。
 
-要求：Windows 上已安装 Conda、Ollama、Node.js 20+ 和 pnpm 11+。
+## 检出率
 
-```powershell
-# 1. 使用 Conda 自带 Python 在 backend 下创建 venv 并安装依赖
-powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
+使用附件中的 20 条客服回复和人工标注，通过真实 DeepSeek API 在页面上完成“创建任务 → 提交人工结果比较 → 采纳优化建议 → 提交新任务”的循环测试。检出率表示人工标记为幻觉的样本中被模型检出的比例；正确率要求幻觉判定和分类名称都与人工标注完全一致，不做分类映射。
 
-# 2. 复制配置并填写 DEEPSEEK_API_KEY
-Copy-Item .env.example .env
+| 轮次 | 检出率 | 正确率 | 漏检 | 误报 | 处理结果 |
+|---|---:|---:|---:|---:|---|
+| 测试1 | 100.0% | 30.0%（6/20） | 0 | 14 | 采纳 9 条优化操作 |
+| 测试2 | 100.0% | 70.0%（14/20） | 0 | 6 | 采纳 6 条优化操作 |
+| 测试3 | 100.0% | 85.0%（17/20） | 0 | 3 | 采纳 3 条优化操作 |
+| 测试4 | 100.0% | 90.0%（18/20） | 0 | 2 | 采纳 2 条优化操作 |
+| 测试5 | 100.0% | 95.0%（19/20） | 0 | 1 | 采纳 2 条优化操作 |
+| 测试6 | 100.0% | 95.0%（19/20） | 0 | 1 | 正确率未提升，终止且不采纳 2 条建议 |
 
-# 3. 检查/下载 Ollama 中文嵌入模型
-powershell -ExecutionPolicy Bypass -File scripts/check-ollama.ps1
-```
+本轮测试的最佳正确率为 95.0%，首次出现在测试5。测试1至测试5的正确率依次为 30.0%、70.0%、85.0%、90.0% 和 95.0%，说明优化建议显著减少了分类名称和分类边界造成的误报；六轮检出率均为 100.0%，没有漏检。
 
-分别打开三个终端：
+测试6仍有 1 条误报：h20 的人工分类为“信息遗漏”，模型分类为“参数编造”。知识证据同时包含“尺码参数”和“未告知偏大半码的关键信息”，两类定义的语义边界接近，模型连续两轮选择“参数编造”。测试6正确率与测试5持平，继续采纳针对同一边界的修改不能证明会带来提升，且可能影响其他参数类样本，因此按停止条件结束测试。
 
-```powershell
-powershell -File scripts/start-chroma.ps1
-powershell -File scripts/start-backend.ps1
-powershell -File scripts/start-frontend.ps1
-```
+每轮保留两张真实页面截图：
 
-访问前端 `http://127.0.0.1:5173`，API 文档位于 `http://127.0.0.1:8000/docs`。
-
-## JSON 格式
-
-知识库：
-
-```json
-{"name":"售后知识库","description":"正式政策","entries":[{"id":"return-01","title":"退货政策","content":"普通商品支持7天无理由退货","metadata":{"source":"policy"}}]}
-```
-
-检测回复：
-
-```json
-[{"id":"h01","user_question":"支持30天无理由退货吗？","system_reply":"全品类支持30天无理由退货。"}]
-```
-
-人工标注：
-
-```json
-[{"id":"h01","is_hallucination":true,"hallucination_type":"政策编造","detail":"回复与实际退货政策矛盾"}]
-```
-
-人工标注 ID 必须与任务条目完整且逐一对应，不允许只上传子集或包含未知 ID。部分失败任务中，人工标注为幻觉但模型未产出判定的条目会计入漏检，避免只统计成功结果造成检出率虚高。
-
-本地附件不会提交仓库。可在本机生成演示导入文件：
-
-```powershell
-backend\.venv\Scripts\python.exe scripts\prepare_demo.py "0110附件\task4_replies.json"
-```
-
-## 测试与代码质量
-
-```powershell
-powershell -File scripts/quality.ps1
-```
-
-后端使用 Ruff、mypy、pytest；前端使用 ESLint、Prettier、vue-tsc、Vitest 和 Vite 生产构建。测试覆盖输入唯一性、任务状态边界、SQLite/Chroma 写操作回滚、嵌入模型一致性、错误提示与前端乐观状态回滚。常规测试只替换外部网络边界，产品中没有 mock 检测模式。
-
-## 附件实测结果
-
-最终结果必须来自真实 DeepSeek API。完成 API Key 配置和 20 条检测后，将在此记录混淆矩阵、Precision、Recall、Accuracy、漏检和误报 ID，并附上真实页面截图。
-
-容易误判的边界包括：知识库只写“未标注”而非明确否定、回复部分正确部分错误、能力限制被写在否定式说明中，以及关键信息遗漏。这些 case 同时依赖检索召回和模型对“无依据肯定”“部分矛盾”的理解。
+- 测试1：[检测结果](docs/image/round-1-detection.png) / [人工比对与优化建议](docs/image/round-1-evaluation.png)
+- 测试2：[检测结果](docs/image/round-2-detection.png) / [人工比对与优化建议](docs/image/round-2-evaluation.png)
+- 测试3：[检测结果](docs/image/round-3-detection.png) / [人工比对与优化建议](docs/image/round-3-evaluation.png)
+- 测试4：[检测结果](docs/image/round-4-detection.png) / [人工比对与优化建议](docs/image/round-4-evaluation.png)
+- 测试5：[检测结果](docs/image/round-5-detection.png) / [人工比对与优化建议](docs/image/round-5-evaluation.png)
+- 测试6：[检测结果](docs/image/round-6-detection.png) / [人工比对与优化建议](docs/image/round-6-evaluation.png)
 
 ## AI 工具使用情况
 
@@ -106,4 +60,4 @@ powershell -File scripts/quality.ps1
 - DeepSeek API：唯一的实际幻觉判定模型，默认 `deepseek-v4-flash`。
 - Ollama：仅运行 `qwen3-embedding:0.6b` 生成本地中文向量，不参与最终幻觉判断。
 
-真实 API Key、SQLite/Chroma 数据、本地附件、模型文件、截图原文件和构建缓存均不提交仓库。
+真实 API Key、SQLite/Chroma 数据、构建缓存均不提交仓库。

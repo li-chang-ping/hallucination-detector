@@ -76,6 +76,11 @@ Copy-Item .env.example .env
 
 必须由用户在本地 `.env` 中填写 `DEEPSEEK_API_KEY`。常用可覆盖项包括 DeepSeek 模型、Ollama 地址及嵌入模型、Chroma 地址、SQLite 地址和前端允许来源；以 `.env.example` 和 `backend/app/config.py` 为准。
 
+评测优化提示词的跨轮上下文通过以下环境变量控制：
+
+- `EVALUATION_HISTORY_ROUNDS`：纳入同一知识库且输入 ID 集合一致的最近评测轮数，默认 `5`，范围 `1-20`。
+- `EVALUATION_CONTEXT_MAX_CHARS`：发送给 LLM 的跨轮优化摘要最大字符数，默认 `24000`，范围 `4000-100000`；超限时优先裁剪较旧、低价值历史，不裁剪本轮误判输入。
+
 不得读取、打印、提交或要求用户在聊天中发送真实 API Key。
 
 ## 服务启动与停止
