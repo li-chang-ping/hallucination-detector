@@ -6,12 +6,14 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import Settings
 from app.db import Base
 from app.models import (
     Category,
     CategorySuggestion,
     CategoryVersion,
     DetectionItem,
+    DetectionTask,
     Evaluation,
     Severity,
 )
@@ -19,8 +21,10 @@ from app.schemas.evaluations import EvaluationRead, GroundTruthBatch, GroundTrut
 from app.services.deepseek import DeepSeekClient, DeepSeekError
 from app.services.evaluations import (
     _fallback_analysis,
+    _trim_optimization_context,
     build_category_performance,
     build_error_cases,
+    build_optimization_context,
     calculate_metrics,
     create_evaluation_insights,
     decide_suggestion,
@@ -148,6 +152,126 @@ def test_category_performance_preserves_correct_hits_and_mismatches() -> None:
             ],
         }
     ]
+
+
+def test_optimization_context_tracks_recurring_errors_and_regressions() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    truths = [
+        GroundTruthItem(id="h01", is_hallucination=True, hallucination_type="信息编造"),
+        GroundTruthItem(id="h02", is_hallucination=True, hallucination_type="信息遗漏"),
+    ]
+    with Session(engine) as session:
+        first_task = DetectionTask(name="测试1", model_name="deepseek", knowledge_base_id=None)
+        second_task = DetectionTask(name="测试2", model_name="deepseek", knowledge_base_id=None)
+        session.add_all([first_task, second_task])
+        session.flush()
+        first_predictions = [
+            prediction("h01", True, "事实信息编造"),
+            prediction("h02", True, "信息遗漏"),
+        ]
+        second_predictions = [
+            prediction("h01", True, "事实信息编造"),
+            prediction("h02", True, "产品参数错误"),
+        ]
+        for item in first_predictions:
+            item.task_id = first_task.id
+        for item in second_predictions:
+            item.task_id = second_task.id
+        first = Evaluation(
+            task_id=first_task.id,
+            metrics=calculate_metrics(first_predictions, truths),
+            ground_truth_count=2,
+            ground_truth_snapshot=[item.model_dump(mode="json") for item in truths],
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        first_retry = Evaluation(
+            task_id=first_task.id,
+            metrics=calculate_metrics(first_predictions, truths),
+            ground_truth_count=2,
+            ground_truth_snapshot=[item.model_dump(mode="json") for item in truths],
+            created_at=datetime(2026, 1, 1, 12, tzinfo=UTC),
+        )
+        second = Evaluation(
+            task_id=second_task.id,
+            metrics=calculate_metrics(second_predictions, truths),
+            ground_truth_count=2,
+            ground_truth_snapshot=[item.model_dump(mode="json") for item in truths],
+            created_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        categories = [
+            Category(name="事实信息编造", description="旧分类", default_severity=Severity.HIGH),
+            Category(name="信息编造", description="人工分类", default_severity=Severity.HIGH),
+            Category(name="信息遗漏", description="人工分类", default_severity=Severity.MEDIUM),
+        ]
+        session.add_all(
+            [*first_predictions, *second_predictions, first, first_retry, second, *categories]
+        )
+        session.commit()
+
+        context = build_optimization_context(
+            session,
+            second,
+            second_predictions,
+            truths,
+            categories,
+            settings=Settings(
+                _env_file=None,
+                evaluation_history_rounds=5,
+                evaluation_context_max_chars=24000,
+            ),
+        )
+
+        assert context["history_round_count"] == 2
+        recurring = context["recurring_mismatches"]
+        assert isinstance(recurring, list)
+        assert recurring[0] == {
+            "expected_category": "信息编造",
+            "predicted_category": "事实信息编造",
+            "round_count": 2,
+            "case_ids": ["h01"],
+        }
+        assert context["regression_cases"] == [
+            {
+                "input_id": "h02",
+                "previous_prediction": "信息遗漏",
+                "current_prediction": "产品参数错误",
+                "expected_category": "信息遗漏",
+            }
+        ]
+
+
+def test_optimization_context_respects_configured_character_budget() -> None:
+    context: dict[str, object] = {
+        "target_taxonomy_names": ["信息编造"],
+        "evaluation_history": [{"evaluation_id": str(index)} for index in range(5)],
+        "recurring_mismatches": [
+            {
+                "expected_category": "信息编造",
+                "predicted_category": f"旧分类{index}",
+                "round_count": 2,
+                "case_ids": ["h01"],
+            }
+            for index in range(20)
+        ],
+        "regression_cases": [],
+        "category_lifetime_performance": [],
+        "category_conflicts": [],
+        "applied_suggestion_history": [
+            {"target_category_name": "旧分类", "proposed_changes": {"description": "x" * 500}}
+            for _ in range(20)
+        ],
+        "context_limits": {"history_rounds": 5, "max_chars": 4000},
+    }
+
+    trimmed = _trim_optimization_context(context, 4000)
+
+    limits = trimmed["context_limits"]
+    assert isinstance(limits, dict)
+    assert limits["serialized_chars"] <= 4000
+    assert limits["truncated"] is True
+    assert trimmed["target_taxonomy_names"] == ["信息编造"]
+    assert len(trimmed["recurring_mismatches"]) >= 3
 
 
 def test_primary_category_mismatch_is_business_false_positive() -> None:

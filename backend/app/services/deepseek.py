@@ -44,7 +44,7 @@ class DeepSeekClient:
                                 {"role": "user", "content": prompt},
                             ],
                             "response_format": {"type": "json_object"},
-                            "temperature": 0.1,
+                            "temperature": 0,
                             "max_tokens": 1200,
                             "thinking": {"type": "disabled"},
                         },
@@ -74,6 +74,7 @@ class DeepSeekClient:
         error_cases: list[dict[str, object]],
         categories: list[dict[str, object]],
         category_performance: list[dict[str, object]] | None = None,
+        optimization_context: dict[str, object] | None = None,
         progress_callback: Callable[[str, int], None] | None = None,
     ) -> EvaluationAnalysisResponse:
         """分析已由确定性指标识别出的误判，不允许模型改写误判清单。"""
@@ -85,9 +86,13 @@ class DeepSeekClient:
             for item in error_cases
             if item.get("human_category") and str(item["human_category"]) not in allowed_names
         }
+        context = optimization_context or {}
+        target_names = {
+            str(name) for name in cast(list[object], context.get("target_taxonomy_names", []))
+        }
         human_names = {
             str(item["human_category"]) for item in error_cases if item.get("human_category")
-        }
+        } | target_names
         existing_human_names = human_names & allowed_names
         migration_sources = {
             str(item["predicted_category"])
@@ -97,16 +102,42 @@ class DeepSeekClient:
             and str(item["human_category"]) in missing_names
         }
         performance = category_performance or []
-        protected_names = existing_human_names | {
-            str(item["category_name"])
-            for item in performance
-            if item.get("category_name") not in {None, "正常", "未分类"}
-            and cast(int, item.get("correct_count", 0)) > 0
+        lifetime_performance = cast(
+            list[dict[str, object]], context.get("category_lifetime_performance", [])
+        )
+        protected_names = (
+            target_names
+            | existing_human_names
+            | {
+                str(item["category_name"])
+                for item in performance + lifetime_performance
+                if item.get("category_name") not in {None, "正常", "未分类"}
+                and cast(int, item.get("correct_count", 0)) > 0
+            }
+        )
+        recurring = cast(list[dict[str, object]], context.get("recurring_mismatches", []))
+        obsolete_sources = {
+            str(item["predicted_category"])
+            for item in recurring
+            if cast(int, item.get("round_count", 0)) >= 2
+            and str(item.get("expected_category")) in target_names
+            and str(item.get("predicted_category")) not in target_names
+            and str(item.get("predicted_category")) in allowed_names
+            and next(
+                (
+                    cast(int, stats.get("correct_count", 0))
+                    for stats in lifetime_performance
+                    if str(stats.get("category_name")) == str(item.get("predicted_category"))
+                ),
+                0,
+            )
+            == 0
         }
         payload_data = {
             "error_cases": error_cases,
             "current_categories": categories,
             "category_performance": performance,
+            "optimization_context": context,
             "evaluation_rule": (
                 "人工分类与模型分类按名称完全一致比较，不允许任何映射；"
                 "名称不同即使语义接近也计为误报。"
@@ -115,6 +146,7 @@ class DeepSeekClient:
             "existing_human_category_names": sorted(existing_human_names),
             "protected_category_names": sorted(protected_names),
             "migration_source_category_names": sorted(migration_sources),
+            "obsolete_recurring_category_names": sorted(obsolete_sources),
             "boundary_mismatches": [
                 {
                     "input_id": item.get("input_id"),
@@ -140,13 +172,20 @@ class DeepSeekClient:
                 "也不得将其反向重命名为模型误选的分类",
                 "protected_category_names 中的分类不得 archive 或修改 name；"
                 "可以 update description 和 prompt_guidance 来澄清与相邻分类的边界",
-                "当人工分类和模型分类都已存在时，这是边界误选问题；优先 update 相关分类的"
-                "description 或 prompt_guidance，禁止 create、archive 或相互重命名",
+                "结合 optimization_context 的历轮准确率、反复错配、回退样本和已采纳建议判断，"
+                "不得重复给出已被证明无效的同类修改",
+                "当人工分类和模型分类都已存在时，先判断是边界含混还是冗余旧分类；"
+                "边界含混可 update，零正确命中且跨轮持续抢占目标分类的旧分类应 archive",
                 "只有人工分类名称缺失时才属于结构迁移；创建缺失分类后，必须归档、重命名或"
                 "更新 migration_source_category_names 中旧分类的边界，避免旧定义继续误选",
                 "名称一对一不一致且目标名称尚不存在时，才可用 update 修改 name",
                 "现有宽泛分类对应多个人工分类时，必须 create 每个缺失的人工同名分类",
                 "名称都已存在时，修改描述或指引的目标是让下一轮模型选择正确的已有名称",
+                "obsolete_recurring_category_names 是无正确用途且跨轮持续误选的旧分类，"
+                "必须归档或重命名，不能仅修改描述或判断指引后继续保留",
+                "target_taxonomy_names 是本批人工标注的完整目标分类集合，不得归档或改名",
+                "每条建议必须给出 resolved_mismatch_pairs、resolved_case_ids、historical_evidence、"
+                "regression_risk 和 regression_risk_reason，明确收益依据及回归风险",
                 "同一个目标名称只能选择 create 或重命名其中一种，不得生成冲突建议",
                 "把全部 suggestions 作为一套原子执行的分类迁移方案，不得包含互相冲突的操作",
                 "一对一名称替换应 update 旧分类名称，不要 create 语义相同的新分类",
@@ -188,7 +227,7 @@ class DeepSeekClient:
                             "model": self.settings.deepseek_model,
                             "messages": messages,
                             "response_format": {"type": "json_object"},
-                            "temperature": 0.1,
+                            "temperature": 0,
                             "max_tokens": 6000,
                             "thinking": {"type": "disabled"},
                         },
@@ -218,6 +257,7 @@ class DeepSeekClient:
                         missing_names,
                         migration_sources=migration_sources,
                         protected_names=protected_names,
+                        obsolete_sources=obsolete_sources,
                     )
                     if progress_callback:
                         progress_callback("优化方案校验通过，正在保存结果", 92)
@@ -242,6 +282,7 @@ class DeepSeekClient:
                                         existing_human_names,
                                         migration_sources,
                                         protected_names,
+                                        obsolete_sources,
                                     ),
                                 },
                             ]
@@ -255,6 +296,7 @@ class DeepSeekClient:
         existing_human_names: set[str],
         migration_sources: set[str],
         protected_names: set[str],
+        obsolete_sources: set[str],
     ) -> str:
         """将本地校验错误反馈给模型，要求修正整套建议而不是盲目重试。"""
         correction = {
@@ -262,11 +304,13 @@ class DeepSeekClient:
             "existing_human_category_names": sorted(existing_human_names),
             "protected_category_names": sorted(protected_names),
             "migration_source_category_names": sorted(migration_sources),
+            "obsolete_recurring_category_names": sorted(obsolete_sources),
             "correction_rules": [
                 "重新输出完整 JSON，不要只输出修改片段",
                 "保留已存在的人工标准分类，禁止将其重命名为模型误选分类",
                 "有正确命中的受保护分类不得归档或改名",
-                "人工分类和模型分类都存在时，使用 update 修改定义或判断指引以澄清边界",
+                "人工分类和模型分类都存在时，区分边界含混与冗余旧分类",
+                "obsolete_recurring_category_names 必须归档或重命名，不能只更新定义",
                 "只有缺失人工分类时才新增，并同步处理 migration_source_category_names",
                 "不得重命名为任何现有分类名称",
                 "所有 suggestions 必须构成可原子执行且无冲突的完整方案",
@@ -284,9 +328,22 @@ class DeepSeekClient:
         *,
         migration_sources: set[str] | None = None,
         protected_names: set[str] | None = None,
+        obsolete_sources: set[str] | None = None,
     ) -> None:
         if not result.suggestions:
             raise ValueError("存在误判但未返回优化建议")
+        incomplete_impacts = [
+            item.target_category_name
+            for item in result.suggestions
+            if not item.resolved_case_ids
+            or not item.historical_evidence
+            or not item.regression_risk_reason
+        ]
+        if incomplete_impacts:
+            raise ValueError(
+                "优化建议缺少预计改善样本、历史依据或回归风险说明: "
+                + ", ".join(sorted(incomplete_impacts))
+            )
         unknown = {
             item.target_category_name
             for item in result.suggestions
@@ -361,13 +418,24 @@ class DeepSeekClient:
                 "新增细分类前必须归档、重命名或更新持续误报的旧分类边界: "
                 + ", ".join(sorted(unresolved_sources))
             )
+        unresolved_obsolete = (
+            ((obsolete_sources or set()) & allowed_names) - archive_names - renamed_sources
+        )
+        if unresolved_obsolete:
+            raise ValueError(
+                "跨轮持续误选且从未正确命中的旧分类必须归档或重命名: "
+                + ", ".join(sorted(unresolved_obsolete))
+            )
 
     @staticmethod
     def _system_prompt() -> str:
         return (
             "你是严格的智能客服幻觉审计器。只能以检索证据为事实来源，不得使用常识补全。"
             "需要识别直接矛盾、无证据的肯定事实、虚假的执行能力、安全误导和实质性遗漏。"
-            "当前采用单标签分类；存在多种问题时，只选择影响最严重、最能概括核心错误的一个分类。"
+            "当前采用单标签分类。逐项核对回复中的事实主张；存在多种问题时，先选择最具体、"
+            "直接覆盖核心错误的分类，再以严重程度决胜，禁止用宽泛父类覆盖已有的精确子类。"
+            "分类名称必须从允许列表原样选择，不得做同义名称映射。定义重叠时遵循判断指引中的"
+            "排除条件和优先级；仍冲突时选择证据匹配最具体的分类并降低置信度。"
             "输出必须是 JSON 对象，字段为 is_hallucination、category_names、"
             "primary_category、severity、confidence、rationale。"
             "幻觉结果的 category_names 必须且只能包含 primary_category 一个值。不要输出思维过程。"
@@ -386,13 +454,10 @@ class DeepSeekClient:
             "retrieved_evidence": evidence,
             "allowed_categories": categories,
             "severity_values": ["low", "medium", "high", "critical"],
-            "output_example": {
-                "is_hallucination": True,
-                "category_names": ["产品参数错误"],
-                "primary_category": "产品参数错误",
-                "severity": "high",
-                "confidence": 0.95,
-                "rationale": "回复中的参数与证据直接矛盾。",
+            "output_constraints": {
+                "hallucination": "category_names 只能包含 primary_category 一个允许分类",
+                "normal": "category_names 为空且 primary_category 为 null",
+                "category_selection": "优先最具体分类；只有具体程度相同才比较严重程度",
             },
         }
         return "请审计以下客服回复，并输出 JSON：\n" + json.dumps(data, ensure_ascii=False)

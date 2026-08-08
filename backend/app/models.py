@@ -156,6 +156,7 @@ class Evaluation(Base):
     insight_stage: Mapped[str] = mapped_column(String(200), default="等待分析")
     insight_events: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
     ground_truth_snapshot: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    optimization_context: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     analyses: Mapped[list["EvaluationAnalysis"]] = relationship(
         back_populates="evaluation", cascade="all, delete-orphan"
@@ -197,6 +198,7 @@ class CategorySuggestion(Base):
     target_category_name: Mapped[str] = mapped_column(String(80))
     reason: Mapped[str] = mapped_column(Text)
     proposed_changes: Mapped[dict[str, object]] = mapped_column(JSON)
+    impact_analysis: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

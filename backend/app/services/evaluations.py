@@ -1,13 +1,16 @@
+import json
 from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.models import (
     Category,
     CategorySuggestion,
     DetectionItem,
+    DetectionTask,
     Evaluation,
     EvaluationAnalysis,
     utc_now,
@@ -219,6 +222,276 @@ def build_category_performance(
     return sorted(performance.values(), key=lambda item: str(item["category_name"]))
 
 
+def _round_snapshot(
+    evaluation: Evaluation,
+    predictions: list[DetectionItem],
+) -> dict[str, object]:
+    """构造一轮评测的紧凑快照，供跨轮趋势分析而非重新调用检测模型。"""
+    truths = [GroundTruthItem.model_validate(item) for item in evaluation.ground_truth_snapshot]
+    truth_map = {item.id: item for item in truths}
+    prediction_map = {item.input_id: item for item in predictions}
+    comparisons: list[dict[str, object]] = []
+    for input_id, truth in sorted(truth_map.items()):
+        prediction = prediction_map.get(input_id)
+        expected = truth.hallucination_type if truth.is_hallucination else "正常"
+        if prediction is None or prediction.is_hallucination is None:
+            predicted = "未产出"
+        elif prediction.is_hallucination:
+            predicted = prediction.primary_category or "未分类"
+        else:
+            predicted = "正常"
+        comparisons.append(
+            {
+                "input_id": input_id,
+                "expected_category": expected or "未分类",
+                "predicted_category": predicted,
+                "is_correct": predicted == (expected or "未分类"),
+            }
+        )
+    return {
+        "evaluation_id": evaluation.id,
+        "task_id": evaluation.task_id,
+        "accuracy": evaluation.metrics.get("accuracy", 0),
+        "created_at": evaluation.created_at.isoformat(),
+        "comparisons": comparisons,
+    }
+
+
+def build_optimization_context(
+    session: Session,
+    evaluation: Evaluation,
+    predictions: list[DetectionItem],
+    truths: list[GroundTruthItem],
+    categories: list[Category],
+    settings: Settings | None = None,
+) -> dict[str, object]:
+    """汇总同一知识库最近轮次，避免建议只针对当前误判做局部修补。"""
+    active_settings = settings or get_settings()
+    current_task = session.get(DetectionTask, evaluation.task_id)
+    prior_evaluations: list[Evaluation] = []
+    target_input_ids = {item.id for item in truths}
+    if current_task is not None:
+        candidates = list(
+            session.scalars(
+                select(Evaluation)
+                .join(DetectionTask, Evaluation.task_id == DetectionTask.id)
+                .where(
+                    Evaluation.id != evaluation.id,
+                    Evaluation.task_id != evaluation.task_id,
+                    Evaluation.created_at < evaluation.created_at,
+                    DetectionTask.knowledge_base_id == current_task.knowledge_base_id,
+                )
+                .order_by(Evaluation.created_at.desc())
+                .limit(30)
+            )
+        )
+        seen_task_ids: set[str] = set()
+        for candidate in candidates:
+            if candidate.task_id in seen_task_ids:
+                continue
+            candidate_ids = {str(item.get("id")) for item in candidate.ground_truth_snapshot or []}
+            if candidate_ids == target_input_ids:
+                prior_evaluations.append(candidate)
+                seen_task_ids.add(candidate.task_id)
+            if len(prior_evaluations) == active_settings.evaluation_history_rounds:
+                break
+    prior_evaluations.reverse()
+    rounds: list[dict[str, object]] = []
+    for prior in prior_evaluations:
+        prior_predictions = list(
+            session.scalars(select(DetectionItem).where(DetectionItem.task_id == prior.task_id))
+        )
+        rounds.append(_round_snapshot(prior, prior_predictions))
+    rounds.append(_round_snapshot(evaluation, predictions))
+
+    recurring: dict[tuple[str, str], dict[str, object]] = {}
+    lifetime: dict[str, dict[str, object]] = {}
+    for round_data in rounds:
+        seen_pairs: set[tuple[str, str]] = set()
+        for comparison in cast(list[dict[str, object]], round_data["comparisons"]):
+            predicted = str(comparison["predicted_category"])
+            expected = str(comparison["expected_category"])
+            if predicted not in {"正常", "未产出", "未分类"}:
+                stats = lifetime.setdefault(
+                    predicted,
+                    {
+                        "category_name": predicted,
+                        "predicted_count": 0,
+                        "correct_count": 0,
+                        "mismatch_count": 0,
+                    },
+                )
+                stats["predicted_count"] = cast(int, stats["predicted_count"]) + 1
+                key = "correct_count" if comparison["is_correct"] else "mismatch_count"
+                stats[key] = cast(int, stats[key]) + 1
+            if comparison["is_correct"]:
+                continue
+            pair = recurring.setdefault(
+                (expected, predicted),
+                {
+                    "expected_category": expected,
+                    "predicted_category": predicted,
+                    "round_count": 0,
+                    "case_ids": [],
+                },
+            )
+            if (expected, predicted) not in seen_pairs:
+                pair["round_count"] = cast(int, pair["round_count"]) + 1
+                seen_pairs.add((expected, predicted))
+            case_ids = cast(list[str], pair["case_ids"])
+            input_id = str(comparison["input_id"])
+            if input_id not in case_ids and len(case_ids) < 10:
+                case_ids.append(input_id)
+
+    regressions: list[dict[str, object]] = []
+    if len(rounds) >= 2:
+        previous = {
+            str(item["input_id"]): item
+            for item in cast(list[dict[str, object]], rounds[-2]["comparisons"])
+        }
+        for current in cast(list[dict[str, object]], rounds[-1]["comparisons"]):
+            old = previous.get(str(current["input_id"]))
+            if old and old["is_correct"] and not current["is_correct"]:
+                regressions.append(
+                    {
+                        "input_id": current["input_id"],
+                        "previous_prediction": old["predicted_category"],
+                        "current_prediction": current["predicted_category"],
+                        "expected_category": current["expected_category"],
+                    }
+                )
+
+    target_names = sorted(
+        {
+            item.hallucination_type
+            for item in truths
+            if item.is_hallucination and item.hallucination_type
+        }
+    )
+    category_conflicts: list[dict[str, str]] = []
+    for index, left in enumerate(categories):
+        for right in categories[index + 1 :]:
+            left_definition = " ".join((left.description + " " + left.prompt_guidance).split())
+            right_definition = " ".join((right.description + " " + right.prompt_guidance).split())
+            if left_definition and left_definition == right_definition:
+                category_conflicts.append(
+                    {
+                        "left_category": left.name,
+                        "right_category": right.name,
+                        "conflict_type": "定义与判断指引完全相同",
+                    }
+                )
+
+    applied_history: list[tuple[CategorySuggestion, Evaluation]] = []
+    historical_evaluation_ids = [item.id for item in prior_evaluations]
+    if historical_evaluation_ids:
+        applied_history = list(
+            session.execute(
+                select(CategorySuggestion, Evaluation)
+                .join(Evaluation, CategorySuggestion.evaluation_id == Evaluation.id)
+                .join(DetectionTask, Evaluation.task_id == DetectionTask.id)
+                .where(
+                    CategorySuggestion.status == "applied",
+                    Evaluation.id.in_(historical_evaluation_ids),
+                )
+                .order_by(Evaluation.created_at.desc())
+                .limit(15)
+            ).tuples()
+        )
+    context: dict[str, object] = {
+        "history_round_count": len(rounds),
+        "target_taxonomy_names": target_names,
+        "evaluation_history": [
+            {
+                "evaluation_id": item["evaluation_id"],
+                "task_id": item["task_id"],
+                "accuracy": item["accuracy"],
+                "created_at": item["created_at"],
+            }
+            for item in rounds
+        ],
+        "recurring_mismatches": sorted(
+            recurring.values(), key=lambda item: cast(int, item["round_count"]), reverse=True
+        )[:20],
+        "regression_cases": regressions[:20],
+        "category_lifetime_performance": sorted(
+            lifetime.values(), key=lambda item: str(item["category_name"])
+        ),
+        "category_conflicts": category_conflicts,
+        "applied_suggestion_history": [
+            {
+                "evaluation_id": historical_evaluation.id,
+                "action": suggestion.action,
+                "target_category_name": suggestion.target_category_name,
+                "proposed_changes": {
+                    key: (value[:300] if isinstance(value, str) else value)
+                    for key, value in suggestion.proposed_changes.items()
+                },
+            }
+            for suggestion, historical_evaluation in applied_history
+        ],
+        "detector_rules": {
+            "comparison": "人工分类与模型主分类名称必须完全一致，不允许映射",
+            "mode": "单标签",
+            "selection": "优先选择最具体且直接覆盖核心错误的分类",
+        },
+        "context_limits": {
+            "history_rounds": active_settings.evaluation_history_rounds,
+            "max_chars": active_settings.evaluation_context_max_chars,
+        },
+    }
+    return _trim_optimization_context(context, active_settings.evaluation_context_max_chars)
+
+
+def _trim_optimization_context(context: dict[str, object], max_chars: int) -> dict[str, object]:
+    """按价值从低到高裁剪历史摘要，避免优化提示词随轮次无限增长。"""
+    trimmed = dict(context)
+    list_fields = (
+        "evaluation_history",
+        "recurring_mismatches",
+        "regression_cases",
+        "category_lifetime_performance",
+        "category_conflicts",
+        "applied_suggestion_history",
+    )
+    for field in list_fields:
+        trimmed[field] = list(cast(list[object], context.get(field, [])))
+
+    def size() -> int:
+        return len(json.dumps(trimmed, ensure_ascii=False, separators=(",", ":")))
+
+    while size() > max_chars:
+        applied = cast(list[object], trimmed["applied_suggestion_history"])
+        conflicts = cast(list[object], trimmed["category_conflicts"])
+        recurring = cast(list[object], trimmed["recurring_mismatches"])
+        history = cast(list[object], trimmed["evaluation_history"])
+        regressions = cast(list[object], trimmed["regression_cases"])
+        lifetime = cast(list[object], trimmed["category_lifetime_performance"])
+        if applied:
+            applied.pop()
+        elif conflicts:
+            conflicts.pop()
+        elif len(recurring) > 3:
+            recurring.pop()
+        elif len(history) > 1:
+            history.pop(0)
+        elif len(regressions) > 5:
+            regressions.pop()
+        elif lifetime:
+            lifetime.pop()
+        else:
+            break
+    limits = cast(dict[str, object], trimmed["context_limits"])
+    serialized_chars = size()
+    limits["serialized_chars"] = serialized_chars
+    limits["truncated"] = serialized_chars > max_chars or any(
+        len(cast(list[object], trimmed[field])) < len(cast(list[object], context.get(field, [])))
+        for field in list_fields
+    )
+    limits["serialized_chars"] = size()
+    return trimmed
+
+
 def _expected_category(truth: GroundTruthItem) -> str | None:
     if not truth.is_hallucination or not truth.hallucination_type:
         return None
@@ -316,6 +589,15 @@ async def create_evaluation_insights(
         for item in categories
     ]
     category_performance = build_category_performance(predictions, truths)
+    optimization_context = build_optimization_context(
+        session,
+        evaluation,
+        predictions,
+        truths,
+        categories,
+    )
+    evaluation.optimization_context = optimization_context
+    session.commit()
     generated = EvaluationAnalysisResponse(analyses=[], suggestions=[])
     analysis_succeeded = False
     try:
@@ -323,6 +605,7 @@ async def create_evaluation_insights(
             error_cases,
             category_payload,
             category_performance=category_performance,
+            optimization_context=optimization_context,
             progress_callback=lambda stage, progress: record_evaluation_progress(
                 session, evaluation, stage, progress
             ),
@@ -364,6 +647,13 @@ async def create_evaluation_insights(
             for key, value in suggestion_draft.model_dump(mode="json").items()
             if key.startswith("proposed_") and value is not None
         }
+        impact_analysis = {
+            "resolved_mismatch_pairs": suggestion_draft.resolved_mismatch_pairs,
+            "resolved_case_ids": suggestion_draft.resolved_case_ids,
+            "historical_evidence": suggestion_draft.historical_evidence,
+            "regression_risk": suggestion_draft.regression_risk,
+            "regression_risk_reason": suggestion_draft.regression_risk_reason,
+        }
         session.add(
             CategorySuggestion(
                 evaluation_id=evaluation.id,
@@ -372,6 +662,7 @@ async def create_evaluation_insights(
                 target_category_name=suggestion_draft.target_category_name,
                 reason=suggestion_draft.reason,
                 proposed_changes=changes,
+                impact_analysis=impact_analysis,
             )
         )
     session.commit()

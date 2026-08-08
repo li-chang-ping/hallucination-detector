@@ -266,8 +266,31 @@ describe('TaskDetailView', () => {
         ground_truth_count: 2,
         insight_status: 'completed',
         insight_error: null,
+        optimization_context: {
+          history_round_count: 3,
+          recurring_mismatches: [
+            {
+              expected_category: '信息编造',
+              predicted_category: '事实信息编造',
+              round_count: 3,
+              case_ids: ['h07'],
+            },
+          ],
+          regression_cases: [],
+        },
         created_at: '2026-08-08T00:00:00Z',
-        analyses: [],
+        analyses: [
+          {
+            id: 'analysis-1',
+            input_id: 'h07',
+            error_type: 'false_positive',
+            human_category: '信息编造',
+            predicted_category: '事实信息编造',
+            reason: '分类名称不一致',
+            likely_cause: '旧分类持续抢占',
+            evidence_summary: '',
+          },
+        ],
         suggestions: [
           {
             id: 'suggestion-1',
@@ -276,6 +299,12 @@ describe('TaskDetailView', () => {
             target_category_name: '政策与优惠错误',
             reason: '由细分类替代',
             proposed_changes: {},
+            impact_analysis: {
+              resolved_case_ids: ['h07'],
+              historical_evidence: { round_count: 3 },
+              regression_risk: 'high',
+              regression_risk_reason: '归档前需确认没有其它正确用途',
+            },
             status: 'pending',
             created_at: '2026-08-08T00:00:00Z',
             decided_at: null,
@@ -299,6 +328,15 @@ describe('TaskDetailView', () => {
 
     expect(apiMocks.post).toHaveBeenCalledWith('/evaluations/evaluation-plan/suggestions/apply-all')
     expect(wrapper.text()).toContain('只能整套采纳或全部忽略')
+    expect(wrapper.text()).toContain('已结合 3 轮评测历史')
+    expect(wrapper.text()).toContain('事实信息编造 → 信息编造（3 轮，h07）')
+    expect(wrapper.text()).toContain('高风险')
+    expect(wrapper.text()).toContain('预计改善：h07')
+    expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('方案包含高回归风险项'),
+      '采纳整套优化方案',
+      expect.any(Object),
+    )
     wrapper.unmount()
   })
 })

@@ -84,9 +84,29 @@ export interface Evaluation {
   insight_progress: number
   insight_stage: string
   insight_events: EvaluationProgressEvent[]
+  optimization_context: EvaluationOptimizationContext
   created_at: string
   analyses: EvaluationAnalysis[]
   suggestions: CategorySuggestion[]
+}
+
+export interface EvaluationOptimizationContext {
+  history_round_count?: number
+  target_taxonomy_names?: string[]
+  evaluation_history?: Array<Record<string, unknown>>
+  recurring_mismatches?: Array<{
+    expected_category: string
+    predicted_category: string
+    round_count: number
+    case_ids: string[]
+  }>
+  regression_cases?: Array<{
+    input_id: string
+    previous_prediction: string
+    current_prediction: string
+    expected_category: string
+  }>
+  category_conflicts?: Array<Record<string, string>>
 }
 
 export interface EvaluationProgressEvent {
@@ -117,6 +137,13 @@ export interface CategorySuggestion {
   proposed_changes: Partial<
     Pick<Category, 'name' | 'description' | 'prompt_guidance' | 'default_severity'>
   >
+  impact_analysis: {
+    resolved_mismatch_pairs?: Array<Record<string, string>>
+    resolved_case_ids?: string[]
+    historical_evidence?: Record<string, unknown>
+    regression_risk?: 'low' | 'medium' | 'high'
+    regression_risk_reason?: string
+  }
   status: 'pending' | 'applied' | 'rejected'
   created_at: string
   decided_at: string | null

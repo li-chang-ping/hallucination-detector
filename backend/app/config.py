@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     app_name: str = "GroundLens API"
     api_prefix: str = "/api/v1"
-    database_url: str = "sqlite:///./data/app.db"
+    database_url: str = "sqlite:///../data/app.db"
     chroma_host: str = "127.0.0.1"
     chroma_port: int = 8001
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_api_key: str = ""
+    evaluation_history_rounds: int = Field(default=5, ge=1, le=20)
+    evaluation_context_max_chars: int = Field(default=24000, ge=4000, le=100000)
     cors_origins: list[str] = ["http://localhost:5173"]
 
     @field_validator("cors_origins", mode="before")
@@ -30,8 +32,8 @@ class Settings(BaseSettings):
         return value
 
     def ensure_data_directory(self) -> None:
-        if self.database_url.startswith("sqlite:///./"):
-            Path(self.database_url.removeprefix("sqlite:///./")).parent.mkdir(
+        if self.database_url.startswith("sqlite:///") and ":memory:" not in self.database_url:
+            Path(self.database_url.removeprefix("sqlite:///")).parent.mkdir(
                 parents=True, exist_ok=True
             )
 
@@ -39,4 +41,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

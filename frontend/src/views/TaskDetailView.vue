@@ -37,6 +37,7 @@ const evaluationStage = ref('')
 const evaluationProgressStatus = ref<'' | 'success' | 'exception'>('')
 const evaluationEvents = ref<EvaluationProgressEvent[]>([])
 const suggestionActionLabels = { create: '新增', update: '修改', archive: '归档' } as const
+const regressionRiskLabels = { low: '低风险', medium: '中风险', high: '高风险' } as const
 let timer: number | undefined
 let evaluationSource: EventSource | undefined
 const latest = computed(() => evaluations.value[0]),
@@ -49,6 +50,9 @@ const latest = computed(() => evaluations.value[0]),
   tokens = computed(
     () =>
       task.value?.items?.reduce((sum, x) => sum + x.prompt_tokens + x.completion_tokens, 0) || 0,
+  ),
+  hasHighRiskSuggestion = computed(() =>
+    latest.value?.suggestions?.some((item) => item.impact_analysis?.regression_risk === 'high'),
   )
 async function load() {
   try {
@@ -190,7 +194,9 @@ async function decideSuggestionPlan(action: 'apply' | 'reject') {
   try {
     await ElMessageBox.confirm(
       action === 'apply'
-        ? '将以一个事务执行全部新增、修改和归档操作，任一步失败都会全部回滚。确认采纳整套方案？'
+        ? `将以一个事务执行全部新增、修改和归档操作，任一步失败都会全部回滚。${
+            hasHighRiskSuggestion.value ? '方案包含高回归风险项，建议先核对历史依据。' : ''
+          }确认采纳整套方案？`
         : '确认忽略本次评测的整套优化方案？',
       action === 'apply' ? '采纳整套优化方案' : '忽略整套优化方案',
       { type: action === 'apply' ? 'warning' : 'info' },
@@ -308,6 +314,29 @@ onBeforeUnmount(() => {
       />
       <template v-if="latest.analyses?.length">
         <h3 class="evaluation-section-title">误判原因分析</h3>
+        <el-alert
+          v-if="latest.optimization_context?.history_round_count"
+          type="info"
+          :closable="false"
+          :title="`本次分析已结合 ${latest.optimization_context.history_round_count} 轮评测历史`"
+          :description="`反复错配 ${latest.optimization_context.recurring_mismatches?.length || 0} 组；较上一轮回退 ${latest.optimization_context.regression_cases?.length || 0} 条。`"
+          style="margin-bottom: 12px"
+        />
+        <div
+          v-if="latest.optimization_context?.recurring_mismatches?.length"
+          class="history-summary"
+        >
+          <strong>跨轮反复错配：</strong>
+          <span
+            v-for="item in latest.optimization_context.recurring_mismatches.slice(0, 5)"
+            :key="`${item.expected_category}-${item.predicted_category}`"
+          >
+            {{ item.predicted_category }} → {{ item.expected_category }}（{{
+              item.round_count
+            }}
+            轮，{{ item.case_ids.join('、') }}）
+          </span>
+        </div>
         <div class="analysis-list">
           <div v-for="item in latest.analyses" :key="item.id" class="analysis-card">
             <div class="analysis-title">
@@ -361,8 +390,27 @@ onBeforeUnmount(() => {
               <el-tag v-if="suggestion.status === 'applied'" type="success">已采纳</el-tag>
               <el-tag v-else-if="suggestion.status === 'rejected'" type="info">已忽略</el-tag>
               <el-tag v-else>待处理</el-tag>
+              <el-tag
+                v-if="suggestion.impact_analysis?.regression_risk"
+                :type="
+                  suggestion.impact_analysis.regression_risk === 'high'
+                    ? 'danger'
+                    : suggestion.impact_analysis.regression_risk === 'low'
+                      ? 'success'
+                      : 'warning'
+                "
+              >
+                {{ regressionRiskLabels[suggestion.impact_analysis.regression_risk] }}
+              </el-tag>
             </div>
             <p>{{ suggestion.reason }}</p>
+            <p v-if="suggestion.impact_analysis?.resolved_case_ids?.length">
+              <strong>预计改善：</strong
+              >{{ suggestion.impact_analysis.resolved_case_ids.join('、') }}
+            </p>
+            <p v-if="suggestion.impact_analysis?.regression_risk_reason">
+              <strong>回归风险：</strong>{{ suggestion.impact_analysis.regression_risk_reason }}
+            </p>
             <div
               v-for="([label, value], index) in categoryChangeEntries(suggestion.proposed_changes)"
               :key="index"
@@ -509,6 +557,17 @@ onBeforeUnmount(() => {
 .analysis-card p {
   margin: 9px 0 0;
   line-height: 1.65;
+}
+.history-summary {
+  display: flex;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
 }
 .analysis-title {
   display: flex;

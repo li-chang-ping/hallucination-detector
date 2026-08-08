@@ -44,6 +44,11 @@ class CategorySuggestionDraft(BaseModel):
     proposed_description: str | None = Field(default=None, min_length=2, max_length=1000)
     proposed_prompt_guidance: str | None = Field(default=None, min_length=2, max_length=2000)
     proposed_default_severity: Severity | None = None
+    resolved_mismatch_pairs: list[dict[str, str]] = Field(default_factory=list)
+    resolved_case_ids: list[str] = Field(default_factory=list)
+    historical_evidence: dict[str, object] = Field(default_factory=dict)
+    regression_risk: Literal["low", "medium", "high"] = "medium"
+    regression_risk_reason: str = Field(default="", max_length=1000)
 
     @model_validator(mode="after")
     def require_change(self) -> "CategorySuggestionDraft":
@@ -91,6 +96,7 @@ class CategorySuggestionRead(BaseModel):
     target_category_name: str
     reason: str
     proposed_changes: dict[str, object]
+    impact_analysis: dict[str, object] = Field(default_factory=dict)
     status: str
     created_at: datetime
     decided_at: datetime | None
@@ -108,6 +114,7 @@ class EvaluationRead(BaseModel):
     insight_progress: int = 0
     insight_stage: str = "等待分析"
     insight_events: list[dict[str, object]] = Field(default_factory=list)
+    optimization_context: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
     analyses: list[EvaluationAnalysisRead] = Field(default_factory=list)
     suggestions: list[CategorySuggestionRead] = Field(default_factory=list)

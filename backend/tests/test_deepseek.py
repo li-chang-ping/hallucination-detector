@@ -14,6 +14,10 @@ def suggestion(action: str, target: str, **changes: object) -> CategorySuggestio
             "action": action,
             "target_category_name": target,
             "reason": "分类名称需要与人工标注对齐",
+            "resolved_case_ids": ["h01"],
+            "historical_evidence": {"round_count": 2},
+            "regression_risk": "medium",
+            "regression_risk_reason": "修改分类可能影响相邻边界",
             **changes,
         }
     )
@@ -164,6 +168,71 @@ def test_suggestion_validation_rejects_rename_to_existing_category() -> None:
         )
 
 
+def test_suggestion_validation_requires_archiving_recurring_obsolete_category() -> None:
+    update_only = EvaluationAnalysisResponse(
+        analyses=[],
+        suggestions=[
+            suggestion(
+                "update",
+                "事实信息编造",
+                proposed_prompt_guidance="不再选择该分类",
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="必须归档或重命名"):
+        DeepSeekClient._validate_suggestions(
+            update_only,
+            {"事实信息编造", "信息编造"},
+            set(),
+            obsolete_sources={"事实信息编造"},
+        )
+
+    archive = EvaluationAnalysisResponse(
+        analyses=[],
+        suggestions=[suggestion("archive", "事实信息编造")],
+    )
+    DeepSeekClient._validate_suggestions(
+        archive,
+        {"事实信息编造", "信息编造"},
+        set(),
+        obsolete_sources={"事实信息编造"},
+    )
+
+
+def test_suggestion_validation_ignores_already_archived_obsolete_category() -> None:
+    current_boundary_update = EvaluationAnalysisResponse(
+        analyses=[],
+        suggestions=[
+            suggestion(
+                "update",
+                "信息遗漏",
+                proposed_prompt_guidance="明确与信息编造的边界",
+            )
+        ],
+    )
+
+    DeepSeekClient._validate_suggestions(
+        current_boundary_update,
+        {"信息遗漏", "信息编造"},
+        set(),
+        obsolete_sources={"事实信息编造", "产品参数错误"},
+    )
+
+
+def test_detection_prompt_has_no_concrete_category_anchor() -> None:
+    prompt = DeepSeekClient._build_prompt(
+        "问题",
+        "回复",
+        [],
+        [{"name": "信息编造", "description": "编造事实", "prompt_guidance": ""}],
+    )
+
+    assert "产品参数错误" not in prompt
+    assert "优先最具体分类" in prompt
+    assert "禁止用宽泛父类" in DeepSeekClient._system_prompt()
+
+
 @pytest.mark.asyncio
 async def test_real_analysis_uses_performance_to_generate_boundary_updates() -> None:
     settings = get_settings()
@@ -220,6 +289,14 @@ async def test_real_analysis_uses_performance_to_generate_boundary_updates() -> 
         error_cases,
         categories,
         category_performance=category_performance,
+        optimization_context={
+            "history_round_count": 2,
+            "target_taxonomy_names": ["优惠编造", "政策编造", "信息遗漏", "信息编造"],
+            "recurring_mismatches": [],
+            "regression_cases": [],
+            "category_lifetime_performance": category_performance,
+            "applied_suggestion_history": [],
+        },
         progress_callback=lambda stage, progress: progress_events.append((stage, progress)),
     )
 
@@ -236,3 +313,74 @@ async def test_real_analysis_uses_performance_to_generate_boundary_updates() -> 
         item.proposed_description or item.proposed_prompt_guidance for item in result.suggestions
     )
     assert progress_events[-1] == ("优化方案校验通过，正在保存结果", 92)
+
+
+@pytest.mark.asyncio
+async def test_real_analysis_archives_recurring_obsolete_category() -> None:
+    settings = get_settings()
+    if not settings.deepseek_api_key:
+        pytest.skip("未配置 DEEPSEEK_API_KEY，跳过真实 API 集成测试")
+    client = DeepSeekClient(settings)
+    result = await client.analyze_evaluation(
+        [
+            {
+                "input_id": "h07",
+                "error_type": "false_positive",
+                "human_category": "信息编造",
+                "predicted_category": "事实信息编造",
+            }
+        ],
+        [
+            {
+                "name": "信息编造",
+                "description": "编造地址、门店、品牌关系等事实信息。",
+                "default_severity": "high",
+                "prompt_guidance": "事实信息没有证据或与证据冲突时命中。",
+            },
+            {
+                "name": "事实信息编造",
+                "description": "编造地址、门店、品牌关系等事实信息。",
+                "default_severity": "high",
+                "prompt_guidance": "事实信息没有证据或与证据冲突时命中。",
+            },
+        ],
+        category_performance=[
+            {"category_name": "事实信息编造", "predicted_count": 1, "correct_count": 0}
+        ],
+        optimization_context={
+            "history_round_count": 3,
+            "target_taxonomy_names": ["信息编造"],
+            "recurring_mismatches": [
+                {
+                    "expected_category": "信息编造",
+                    "predicted_category": "事实信息编造",
+                    "round_count": 3,
+                    "case_ids": ["h07"],
+                }
+            ],
+            "regression_cases": [],
+            "category_lifetime_performance": [
+                {
+                    "category_name": "事实信息编造",
+                    "predicted_count": 3,
+                    "correct_count": 0,
+                    "mismatch_count": 3,
+                }
+            ],
+            "category_conflicts": [
+                {
+                    "left_category": "信息编造",
+                    "right_category": "事实信息编造",
+                    "conflict_type": "定义与判断指引完全相同",
+                }
+            ],
+            "applied_suggestion_history": [],
+        },
+    )
+
+    obsolete = next(
+        item for item in result.suggestions if item.target_category_name == "事实信息编造"
+    )
+    assert obsolete.action == "archive"
+    assert "h07" in obsolete.resolved_case_ids
+    assert obsolete.regression_risk_reason
