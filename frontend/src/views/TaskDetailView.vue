@@ -374,7 +374,10 @@ onBeforeUnmount(() => {
               :disabled="!canEvaluateTask(task.status) || evaluating"
               :on-change="(f: any) => (evaluationFile = f.raw)"
               ><el-button :icon="Upload">选择人工标注</el-button></el-upload
-            ><el-button
+            ><span v-if="evaluationFile" class="selected-file-name" :title="evaluationFile.name">
+              已选择：{{ evaluationFile.name }}
+            </span>
+            <el-button
               type="primary"
               :loading="evaluating"
               :disabled="!evaluationFile || !canEvaluateTask(task.status) || evaluating"
@@ -540,5 +543,13 @@ onBeforeUnmount(() => {
 }
 .evaluation-event small {
   color: var(--el-text-color-secondary);
+}
+.selected-file-name {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

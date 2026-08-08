@@ -141,6 +141,7 @@ describe('TaskDetailView', () => {
     }) => void
     selectFile({ raw: new File(['[]'], 'ground-truth.json', { type: 'application/json' }) })
     await flushPromises()
+    expect(wrapper.text()).toContain('已选择：ground-truth.json')
     const compareButton = wrapper
       .findAll('button')
       .find((button) => button.text().includes('开始比对'))

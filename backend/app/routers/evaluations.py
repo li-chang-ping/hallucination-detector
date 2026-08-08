@@ -81,11 +81,33 @@ async def evaluate_task(
         raise HTTPException(status_code=400, detail="仅支持 JSON 文件")
     try:
         payload = json.loads((await file.read()).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"人工标注 JSON 无法解析: {exc}") from exc
+    if not isinstance(payload, list):
+        raise HTTPException(status_code=422, detail="人工标注 JSON 顶层必须是数组")
+    if payload and isinstance(payload[0], dict) and "is_hallucination" not in payload[0]:
+        if "user_question" in payload[0] or "system_reply" in payload[0]:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "上传的是检测回复数据，不是人工标注结果；"
+                    "请上传每条包含 id、is_hallucination、hallucination_type 和 detail 的 JSON"
+                ),
+            )
+        raise HTTPException(
+            status_code=422,
+            detail="人工标注第 1 条缺少必填字段 is_hallucination",
+        )
+    try:
         truths = GroundTruthBatch(
             items=TypeAdapter(list[GroundTruthItem]).validate_python(payload)
         ).items
-    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
-        raise HTTPException(status_code=422, detail=f"人工标注 JSON 格式错误: {exc}") from exc
+    except ValidationError as exc:
+        first_error = exc.errors(include_url=False)[0]
+        location = ".".join(str(part) for part in first_error.get("loc", ()))
+        message = str(first_error.get("msg", "字段格式不正确"))
+        detail = f"人工标注字段 {location or '未知'} 格式错误：{message}"
+        raise HTTPException(status_code=422, detail=detail) from exc
     predictions = list(
         session.scalars(select(DetectionItem).where(DetectionItem.task_id == task_id))
     )
